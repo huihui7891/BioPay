@@ -21,6 +21,9 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.check_version.outputs.tag }}
+      version_code: ${{ steps.check_version.outputs.version_code }}
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -29,6 +32,8 @@ jobs:
 
       - name: Check version status
         id: check_version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n 1)
           test -n "$NAME" || { echo "error: versionName not found"; exit 1; }
@@ -38,16 +43,20 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts | head -n 1)
+          test -n "$CODE" || { echo "error: versionCode not found"; exit 1; }
           TAG="v$NAME"
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -qE "refs/tags/$TAG(\^\{\})?$"; then
-            echo "Tag $TAG already released, nothing to do."
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp > "$RUNNER_TEMP/releases.json"
+          if jq -e --arg tag "$TAG" --arg apk "BioPay-$TAG.apk" 'any(.[][]; .tag_name == $tag and .draft == false and .prerelease == false and any(.assets[]; .name == $apk and .size > 0))' "$RUNNER_TEMP/releases.json" > /dev/null; then
+            echo "Release $TAG already published; checking module repository sync next."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "New unreleased version: $TAG"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
         if: steps.check_version.outputs.changed == 'true'
@@ -125,3 +134,32 @@ jobs:
           body_path: changelog.txt
           files: |
             app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
+
+  sync_module_repository:
+    name: Sync LSPosed module repository
+    needs: release
+    if: needs.release.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: biopay-module-repository
+      cancel-in-progress: false
+    steps:
+      - name: Check out listing source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Set MODULE_REPO_TOKEN to a token with Contents write access to
+      # Xposed-Modules-Repo/io.github.kiriashi.biopay. GITHUB_TOKEN cannot write there.
+      - name: Sync README, SUMMARY and signed release APK
+        env:
+          GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
+          SOURCE_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          MODULE_REPOSITORY: Xposed-Modules-Repo/io.github.kiriashi.biopay
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          VERSION_CODE: ${{ needs.release.outputs.version_code }}
+        run: python3 .github/scripts/sync_module_repository.py
