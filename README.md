@@ -76,20 +76,19 @@ BioPay 通过 Android 的 **BiometricPrompt** 调用指纹或面容。部分设�
 
 ## 隐私与安全
 
-- 支付密码使用 AES-256-GCM 加密，密钥由 Android Keystore 管理；密文保存在对应支付应用的本地私有数据中，并按应用隔离。硬件保护能力取决于设备。
+- 支付密码使用 AES-256-GCM 加密保存于本地并按应用隔离；密钥由 Android Keystore 管理，硬件保护能力取决于设备。
 - BioPay 不申请网络或剪贴板权限，也不会收集或上传支付密码、生物信息。
-- 指纹和面容由 Android 系统识别。认证成功后，BioPay 才解密并输入密码；认证校验由支付流程执行，Keystore 密钥本身不要求生物认证。
+- 指纹和面容由 Android 系统识别。认证成功后，BioPay 才解密并输入密码，完成后会自动清除明文信息；
 
 ## 遇到问题
 
-先确认 LSPosed 中模块及作用域已启用、设备已录入生物信息，并且传感器安全等级属于STRENGTH_WEAK OR STRONG。
-发现问题或是申请想要的功能可以提交 Isuues，如果你有自己的想法或改进方案也欢迎提交 PR。
+先确认 LSPosed 中模块及作用域已启用、设备已录入生物信息，并确认设备的传感器满足系统生物认证要求。
+如需反馈问题或申请功能，请提交 [Issue](https://github.com/kiriashi/BioPay/issues)；也欢迎通过 Pull Request 提交改进。
 也可以加入 [Telegram 交流群](https://t.me/biopaychat) 进行讨论。
 
 ## 致谢
 
 * [FingerprintPay](https://github.com/eritpchy/FingerprintPay)
-* [APatch](https://github.com/bmax121/APatch)
 * [LSPosed](https://github.com/LSPosed/LSPosed)
 
 ## 开源协议与免责声明
