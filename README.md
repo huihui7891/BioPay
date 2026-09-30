@@ -25,7 +25,7 @@
 
 ## 支持应用与设置入口
 
-| 应用 | 在哪里打开 BioPay 设置 |
+| 应用名称 | 在哪里打开 BioPay 设置 |
 | --- | --- |
 | 微信 | “我 → 设置”，长按页面标题“设置” |
 | QQ | 聊天页右上角“+”菜单中最下方的“生物支付” |
@@ -53,7 +53,7 @@ flowchart TD
 
 ## 安装与设置
 
-**需要：** Android 9.0+ 版本、支持 LibXposed API 102 的 LSPosed，以及设备上已录入且受系统生物认证支持的指纹或面容。
+**需要：** Android 10+ 版本、支持 LibXposed API 102 的 LSPosed，以及设备上已录入指纹或面容。
 
 1. 从 [Releases](https://github.com/kiriashi/BioPay/releases) 下载 APK，并查看该版本的支持范围。
 2. 在 LSPosed 中启用 BioPay，勾选需要使用的支付应用作用域。

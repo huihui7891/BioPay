@@ -5,11 +5,11 @@
  */
 package io.github.kiriashi.biopay.apps.taobao
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.Drawable
-import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -21,7 +21,6 @@ import io.github.kiriashi.biopay.settings.ui.Theme
 import io.github.kiriashi.biopay.apps.shared.EntryInstaller
 import io.github.kiriashi.biopay.apps.shared.SettingsEntry
 import io.github.kiriashi.biopay.apps.shared.visitViews
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.dp
 import java.util.WeakHashMap
 
@@ -428,7 +427,7 @@ private fun createTaobaoNativeRow(activity: Activity): LinearLayout? {
         val args = if (constructor.parameterTypes.size == 1) arrayOf(activity) else arrayOf(activity, null)
         constructor.newInstance(*args) as LinearLayout
     }.getOrElse { error ->
-        Log.w(LOG_TAG, "Could not create Taobao native settings row", error)
+        ModuleLog.w(error) { "Could not create Taobao native settings row" }
         null
     }
 }

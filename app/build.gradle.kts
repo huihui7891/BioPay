@@ -1,17 +1,12 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 import java.io.FileInputStream
 import java.util.Properties
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 kotlin {
     jvmToolchain(21)
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
 }
 
 // Read signing credentials from CI or an untracked local.properties file.
@@ -28,10 +23,10 @@ android {
 
     defaultConfig {
         applicationId = "io.github.kiriashi.biopay"
-        minSdk = 28
+        minSdk = 29
         targetSdk = 35
         versionCode = 260930
-        versionName = "2.0.0"
+        versionName = "2.0.1"
     }
 
     signingConfigs {
@@ -49,15 +44,12 @@ android {
             isDebuggable = true
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            optimization {
+                enable = true
+            }
             isDebuggable = false
             // Keep local release builds usable when no keystore is configured.
             signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile?.exists() == true }
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
         }
     }
 
@@ -71,8 +63,8 @@ android {
     }
 
     lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 }
 

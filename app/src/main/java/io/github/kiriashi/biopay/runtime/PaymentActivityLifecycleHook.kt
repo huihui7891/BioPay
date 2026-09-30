@@ -5,10 +5,9 @@
  */
 package io.github.kiriashi.biopay.runtime
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
 import android.app.Instrumentation
-import android.util.Log
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.libxposed.api.XposedInterface
 
@@ -17,10 +16,10 @@ object PaymentActivityLifecycleHook {
     const val ALIPAY_RESUME_ID = "bp_alipay_activity_resume"
     const val TAOBAO_RESUME_ID = "bp_taobao_instrumentation_resume"
 
-    fun register(xposed: XposedInterface, state: AppRuntime) {
+    fun register(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
         val app = state.adapter.app
-        if (app != PaymentApp.ALIPAY && app != PaymentApp.TAOBAO) return
-        try {
+        if (app != PaymentApp.ALIPAY && app != PaymentApp.TAOBAO) return null
+        return try {
             val method = if (app == PaymentApp.ALIPAY) {
                 Activity::class.java.getDeclaredMethod("onResume")
             } else {
@@ -29,7 +28,8 @@ object PaymentActivityLifecycleHook {
             val id = if (app == PaymentApp.ALIPAY) ALIPAY_RESUME_ID else TAOBAO_RESUME_ID
             xposed.hook(method).setId(id).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "$app payment Activity resume hook failed", e)
+            ModuleLog.w(e) { "$app payment Activity resume hook failed" }
+            null
         }
     }
 
@@ -41,7 +41,7 @@ object PaymentActivityLifecycleHook {
                 state.watchActivity(activity)
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "payment Activity resume inspection failed", e)
+            ModuleLog.w(e) { "payment Activity resume inspection failed" }
         }
         result
     }

@@ -5,36 +5,19 @@
  */
 package io.github.kiriashi.biopay.payment
 
-import android.util.Log
+import android.os.Looper
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import java.lang.reflect.Field
-import java.lang.reflect.Method
+import android.view.inspector.WindowInspector
+import io.github.kiriashi.biopay.core.log.ModuleLog
 
-/** Finds dialogs and popup windows that are outside an Activity's decor tree. */
+/** Includes Activity, Dialog and popup roots without reading framework internals. */
 internal object PaymentWindowRoots {
-    private data class Access(val getInstance: Method, val views: Field)
-
-    private val access: Access? by lazy {
-        runCatching {
-            val type = Class.forName("android.view.WindowManagerGlobal")
-            Access(
-                type.getDeclaredMethod("getInstance").apply { isAccessible = true },
-                type.getDeclaredField("mViews").apply { isAccessible = true }
-            )
-        }.onFailure { Log.w(LOG_TAG, "payment window enumeration unavailable", it) }.getOrNull()
-    }
-
     fun attached(): List<ViewGroup> {
-        val reflection = access ?: return emptyList()
+        check(Looper.myLooper() == Looper.getMainLooper()) { "Window inspection must run on the main thread" }
         return runCatching {
-            val manager = reflection.getInstance.invoke(null)
-            val views = reflection.views.get(manager) as? Iterable<*> ?: return emptyList()
-            buildList {
-                for (view in views) {
-                    if (view is ViewGroup && view.isAttachedToWindow) add(view)
-                }
-            }
-        }.getOrDefault(emptyList())
+            WindowInspector.getGlobalWindowViews().filterIsInstance<ViewGroup>()
+                .filter { it.isAttachedToWindow }
+        }.onFailure { ModuleLog.w(it) { "payment window enumeration failed" } }
+            .getOrDefault(emptyList())
     }
 }

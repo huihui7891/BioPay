@@ -18,6 +18,7 @@
  */
 package io.github.kiriashi.biopay.settings
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
@@ -34,21 +35,45 @@ class DialogHost(context: Context) {
     private var dialog: AlertDialog? = null
     private val authentication = SessionToken()
     private var signal: CancellationSignal? = null
-    fun beginAuthentication(newSignal: CancellationSignal): Long {
+    private var authenticationCleanup: (() -> Unit)? = null
+    @Volatile private var closed = false
+    private var working = false
+    val isOpen: Boolean get() = !closed
+    val isBusy: Boolean get() = working || signal != null
+
+    fun beginWork(): Boolean {
+        if (closed || isBusy) return false
+        working = true
+        return true
+    }
+
+    fun finishWork(): Boolean {
+        working = false
+        return !closed
+    }
+    fun beginAuthentication(newSignal: CancellationSignal, cleanup: () -> Unit = {}): Long {
         cancelAuthentication()
         signal = newSignal
+        authenticationCleanup = cleanup
         return authentication.begin()
     }
     fun finishAuthentication(id: Long): Boolean {
         if (!authentication.finish(id)) return false
         signal = null
+        authenticationCleanup = null
         return true
     }
     private fun cancelAuthentication() {
         authentication.invalidate()
         val previous = signal
         signal = null
-        previous?.cancel()
+        val cleanup = authenticationCleanup
+        authenticationCleanup = null
+        try {
+            previous?.cancel()
+        } catch (error: Exception) {
+            ModuleLog.w(error) { "settings authentication cancellation failed" }
+        } finally { cleanup?.invoke() }
     }
     var onDismiss: (() -> Unit)? = null
     private val ctx get() = contextRef.get()
@@ -66,7 +91,13 @@ class DialogHost(context: Context) {
                 setCanceledOnTouchOutside(false)
                 window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
             }
-        dialog?.setOnDismissListener { cancelAuthentication(); dialog = null; onDismiss?.invoke() }
+        dialog?.setOnDismissListener {
+            closed = true
+            cancelAuthentication()
+            dialog = null
+            onDismiss?.invoke()
+            onDismiss = null
+        }
         dialog?.show()
         dialog?.window?.let { window ->
             window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -80,8 +111,16 @@ class DialogHost(context: Context) {
         return dialog?.isShowing == true
     }
     fun dismiss() {
+        closed = true
         cancelAuthentication()
-        dialog?.let { if (it.isShowing) it.dismiss() }
-        dialog = null
+        try {
+            dialog?.dismiss()
+        } catch (error: Exception) {
+            ModuleLog.w(error) { "settings dialog dismissal failed" }
+        } finally {
+            dialog = null
+            onDismiss?.invoke()
+            onDismiss = null
+        }
     }
 }

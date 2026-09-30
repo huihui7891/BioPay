@@ -5,18 +5,15 @@
  */
 package io.github.kiriashi.biopay.apps.shared
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
 import android.os.SystemClock
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.LinearLayout
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.runtime.AppRuntime
-import io.github.kiriashi.biopay.runtime.FieldStore
-import io.github.kiriashi.biopay.settings.SettingsDialog
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
@@ -101,11 +98,10 @@ internal class EntryInstaller(
             val installed = entry.install(this, activity, root)
             if (installed) {
                 findTagged(root)?.let { installedRows[root] = WeakReference(it) }
-                Log.i(LOG_TAG, "${app.displayName} native BioPay entry installed")
-                diagnostic(Log.INFO, "${app.displayName} native settings entry installed")
+                ModuleLog.d { "${app.displayName} native BioPay entry installed" }
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "${app.displayName} native entry insertion failed", e)
+            ModuleLog.w(e) { "${app.displayName} native entry insertion failed" }
         }
     }
 
@@ -117,17 +113,17 @@ internal class EntryInstaller(
             try {
                 entry.onExisting(this, activity, root, existing)
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "${app.displayName} transient entry refresh failed", e)
+                ModuleLog.w(e) { "${app.displayName} transient entry refresh failed" }
             }
             return
         }
         if (existing != null && !entry.replaceHidden(root, existing)) return
         try {
             if (entry.install(this, activity, root)) {
-                Log.i(LOG_TAG, "${app.displayName} transient native entry installed")
+                ModuleLog.d { "${app.displayName} transient native entry installed" }
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "${app.displayName} transient entry insertion failed", e)
+            ModuleLog.w(e) { "${app.displayName} transient entry insertion failed" }
         }
     }
 
@@ -178,7 +174,7 @@ internal class EntryInstaller(
         stopWatching(activity)
         (activity.window?.decorView as? ViewGroup)?.let(installedRows::remove)
         cleanups.remove(activity)?.asReversed()?.forEach { cleanup ->
-            runCatching(cleanup).onFailure { Log.d(LOG_TAG, "entry cleanup failed", it) }
+            runCatching(cleanup).onFailure { ModuleLog.d(it) { "entry cleanup failed" } }
         }
         lastAttempt.remove(activity)
         entry.remove(activity)
@@ -233,24 +229,13 @@ internal class EntryInstaller(
     internal fun openSettings(activity: Activity) {
         if (closed) return
         if (activity.isFinishing || activity.isDestroyed) return
-        if (!state.fields.compareAndSetField(activity, FieldStore.SETTINGS_DIALOG, false, true)) return
-        try {
-            if (!SettingsDialog.show(activity, state)) {
-                state.fields.removeField(activity, FieldStore.SETTINGS_DIALOG)
-                Log.w(LOG_TAG, "BioPay settings dialog could not be shown")
-            }
-        } catch (e: Throwable) {
-            state.fields.removeField(activity, FieldStore.SETTINGS_DIALOG)
-            Log.w(LOG_TAG, "BioPay settings dialog failed", e)
+        if (!state.showSettings(activity)) {
+            ModuleLog.w { "BioPay settings dialog could not be shown" }
         }
     }
 
     internal fun record(activity: Activity, cleanup: () -> Unit) {
         cleanups.getOrPut(activity) { mutableListOf() }.add(cleanup)
-    }
-
-    internal fun diagnostic(priority: Int, message: String) {
-        state.diagnostic(priority, message)
     }
 
     private fun findTagged(root: ViewGroup): View? = entry.findExisting(root)

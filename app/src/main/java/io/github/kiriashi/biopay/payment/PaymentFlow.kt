@@ -18,18 +18,15 @@
  */
 package io.github.kiriashi.biopay.payment
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.biometric.BiometricAuth
 
 import android.app.Activity
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.core.util.MainTasks
-import io.github.kiriashi.biopay.storage.PasswordVersionPolicy
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import java.lang.ref.WeakReference
 
@@ -44,13 +41,6 @@ class PaymentFlow(private val state: AppRuntime) {
                            hostActivity: Activity? = null, startImmediately: Boolean = true): Boolean {
         if (state.isClosed) return false
         val config = state.prefs.activeConfig()?.takeIf { it.encryptedPassword == encodedPassword } ?: return false
-        if (PasswordVersionPolicy.requiresReentry(encodedPassword, config.passwordVersion)) {
-            Log.w(LOG_TAG, "setupBiometricAuth: stored password format requires re-entry")
-            LogCapture.log("setup: stored password format requires re-entry")
-            state.prefs.clearPassword()
-            return false
-        }
-
         val (sessionId, shouldTrigger) = synchronized(setupLock) {
             val alreadyInProgress = state.session.isAuthenticationInProgress() ||
                 PasswordAutoInput.isInProgress(state.session.currentSessionId())
@@ -97,7 +87,7 @@ class PaymentFlow(private val state: AppRuntime) {
                 BiometricAuth.triggerBiometricAuth(keyboardView, config.encryptedPassword, state, state.session.currentSessionId())
             }
         } catch (e: Throwable) {
-            Log.d(LOG_TAG, "toggleBetweenBiometricAndKeyboard failed", e)
+            ModuleLog.d(e) { "toggleBetweenBiometricAndKeyboard failed" }
         }
     }
 
@@ -138,12 +128,11 @@ class PaymentFlow(private val state: AppRuntime) {
                     !PasswordAutoInput.isInProgress(sessionId)) {
                     val encoded = state.prefs.activePassword()
                     if (!encoded.isNullOrEmpty()) {
-                        Log.d(LOG_TAG, "onViewAttached: triggering auth, view=${kv.hashCode()}")
-                        LogCapture.log("onViewAttached: triggering auth")
+                        ModuleLog.d { "onViewAttached: triggering auth, view=${kv.hashCode()}" }
                         BiometricAuth.triggerBiometricAuth(kv, encoded, state, sessionId)
                     }
                 } else {
-                    Log.d(LOG_TAG, "onViewAttached: biometric in progress, skipping, view=${kv.hashCode()}")
+                    ModuleLog.d { "onViewAttached: biometric in progress, skipping, view=${kv.hashCode()}" }
                 }
             }
         }
@@ -158,13 +147,11 @@ class PaymentFlow(private val state: AppRuntime) {
 
             if (state.session.isAuthenticationInProgress()) {
                 // Payment Activities can recreate the keyboard during authentication.
-                Log.d(LOG_TAG, "onViewDetached: keeping payment session, view=${detachedView.hashCode()}")
-                LogCapture.log("onViewDetached: keeping active session")
+                ModuleLog.d { "onViewDetached: keeping payment session, view=${detachedView.hashCode()}" }
                 return
             }
 
-            Log.d(LOG_TAG, "onViewDetached: clearing payment state, view=${detachedView.hashCode()}")
-            LogCapture.log("onViewDetached: clearing state")
+            ModuleLog.d { "onViewDetached: clearing payment state, view=${detachedView.hashCode()}" }
             state.session.endSession(sessionId)
             keyboardView = null
             sessionId = 0L

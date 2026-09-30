@@ -5,14 +5,13 @@
  */
 package io.github.kiriashi.biopay.apps.qq
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.content.Context
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.PopupWindow
 import io.github.kiriashi.biopay.apps.PaymentApp
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
@@ -40,38 +39,14 @@ internal object QqMenuEntryHook {
         var popupRef: WeakReference<PopupWindow>? = null
     )
 
-    fun register(xposed: XposedInterface, state: AppRuntime) {
-        if (state.adapter.app != PaymentApp.QQ) return
-        registerAddView(xposed, state)
-        registerPopupMethod(
-            xposed,
-            state,
-            SHOW_DROPDOWN_ID,
-            "showAsDropDown",
-            View::class.java,
-            Int::class.javaPrimitiveType!!,
-            Int::class.javaPrimitiveType!!
-        )
-        registerDismiss(xposed, state)
-        registerPopupMethod(
-            xposed,
-            state,
-            SHOW_LOCATION_ID,
-            "showAtLocation",
-            View::class.java,
-            Int::class.javaPrimitiveType!!,
-            Int::class.javaPrimitiveType!!,
-            Int::class.javaPrimitiveType!!
-        )
-    }
-
-    fun registerAddView(xposed: XposedInterface, state: AppRuntime) {
-        if (state.adapter.app != PaymentApp.QQ) return
-        try {
+    fun registerAddView(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        if (state.adapter.app != PaymentApp.QQ) return null
+        return try {
             val method = PaymentWindowHook.addViewMethod()
             xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "QQ popup entry hook registration failed", e)
+            ModuleLog.w(e) { "QQ popup entry hook registration failed" }
+            null
         }
     }
 
@@ -104,18 +79,18 @@ internal object QqMenuEntryHook {
                 root.post {
                     if (state.isClosed || !root.isAttachedToWindow) return@post
                     runCatching { state.visualMonitor?.watchWindow(root) }
-                        .onFailure { Log.w(LOG_TAG, "QQ payment window inspection failed", it) }
+                        .onFailure { ModuleLog.w(it) { "QQ payment window inspection failed" } }
                     val activity = root.context.findActivity()
                     if (activity?.packageName != state.app.packageName) return@post
                     runCatching {
                         state.installPopupEntry(activity, root)
                         // QQ can finalize popup height after addView returns.
                         scheduleRetries(root, activity, state)
-                    }.onFailure { Log.w(LOG_TAG, "QQ popup inspection failed", it) }
+                    }.onFailure { ModuleLog.w(it) { "QQ popup inspection failed" } }
                 }
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "QQ popup inspection failed", e)
+            ModuleLog.w(e) { "QQ popup inspection failed" }
         }
         result
     }
@@ -144,7 +119,7 @@ internal object QqMenuEntryHook {
                 }
             }
         } catch (e: Throwable) {
-            Log.d(LOG_TAG, "QQ popup reference capture skipped", e)
+            ModuleLog.d(e) { "QQ popup reference capture skipped" }
         }
         result
     }
@@ -153,7 +128,7 @@ internal object QqMenuEntryHook {
         cancelRetries(root)
         val popup = popupFor(root) ?: return
         runCatching { if (popup.isShowing) popup.dismiss() }
-            .onFailure { Log.w(LOG_TAG, "QQ action menu dismissal failed", it) }
+            .onFailure { ModuleLog.w(it) { "QQ action menu dismissal failed" } }
         restorePopup(popup)
     }
 
@@ -162,7 +137,7 @@ internal object QqMenuEntryHook {
         try {
             (chain.thisObject as? PopupWindow)?.let(::restorePopup)
         } catch (e: Throwable) {
-            Log.d(LOG_TAG, "QQ popup size restoration skipped", e)
+            ModuleLog.d(e) { "QQ popup size restoration skipped" }
         }
         result
     }
@@ -209,7 +184,7 @@ internal object QqMenuEntryHook {
                 val popupBase = adjustment.originalPopupHeight?.takeIf { it > 0 } ?: baseHeight
                 popup.height = popupBase + adjustment.extraHeight
                 popup.update()
-            }.onFailure { Log.w(LOG_TAG, "QQ popup expansion retry failed", it) }
+            }.onFailure { ModuleLog.w(it) { "QQ popup expansion retry failed" } }
         }
 
         val params = root.layoutParams as? WindowManager.LayoutParams
@@ -222,7 +197,7 @@ internal object QqMenuEntryHook {
                     (root.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                         .updateViewLayout(root, params)
                 }
-            }.onFailure { Log.w(LOG_TAG, "QQ action menu window resize failed", it) }
+            }.onFailure { ModuleLog.w(it) { "QQ action menu window resize failed" } }
         }
         root.requestLayout()
     }
@@ -233,23 +208,25 @@ internal object QqMenuEntryHook {
         id: String,
         name: String,
         vararg parameters: Class<*>
-    ) {
-        if (state.adapter.app != PaymentApp.QQ) return
-        try {
+    ): XposedInterface.HookHandle? {
+        if (state.adapter.app != PaymentApp.QQ) return null
+        return try {
             val method = PopupWindow::class.java.getDeclaredMethod(name, *parameters)
             xposed.hook(method).setId(id).intercept(makePopupInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "QQ popup lifecycle hook $name registration failed", e)
+            ModuleLog.w(e) { "QQ popup lifecycle hook $name registration failed" }
+            null
         }
     }
 
-    fun registerDismiss(xposed: XposedInterface, state: AppRuntime) {
-        if (state.adapter.app != PaymentApp.QQ) return
-        try {
+    fun registerDismiss(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        if (state.adapter.app != PaymentApp.QQ) return null
+        return try {
             val method = PopupWindow::class.java.getDeclaredMethod("dismiss")
             xposed.hook(method).setId(DISMISS_ID).intercept(makeDismissInterceptor())
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "QQ popup dismissal hook registration failed", e)
+            ModuleLog.w(e) { "QQ popup dismissal hook registration failed" }
+            null
         }
     }
 
@@ -298,7 +275,7 @@ internal object QqMenuEntryHook {
                         .updateViewLayout(root, params)
                 }
             }
-        }.onFailure { Log.w(LOG_TAG, "QQ popup size restoration failed", it) }
+        }.onFailure { ModuleLog.w(it) { "QQ popup size restoration failed" } }
     }
 
     private val EXPANSION_RETRIES = longArrayOf(80L, 200L, 500L, 900L)

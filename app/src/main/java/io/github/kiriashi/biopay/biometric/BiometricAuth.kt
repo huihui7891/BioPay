@@ -18,15 +18,13 @@
  */
 package io.github.kiriashi.biopay.biometric
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.payment.KeyboardCloak
 import io.github.kiriashi.biopay.payment.PasswordAutoInput
 
 import android.hardware.biometrics.BiometricPrompt
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.storage.PasswordCipher
 import io.github.kiriashi.biopay.storage.PaymentConfig
@@ -42,19 +40,18 @@ object BiometricAuth {
         val config = state.session.currentConfig() ?: return false
         if (state.isClosed || !state.session.isCurrentSession(sessionId) ||
             config.encryptedPassword != encodedPassword || !state.prefs.isCurrent(config)) {
-            Log.w(LOG_TAG, "biometric auth skipped: payment session expired or settings changed, app=${state.adapter.app}")
+            ModuleLog.d { "biometric auth skipped: payment session expired or settings changed, app=${state.adapter.app}" }
             return false
         }
         val activity = keyboardView.context.findActivity() ?: state.session.getHostActivity()
         if (activity == null || activity.isFinishing || activity.isDestroyed) {
-            Log.w(LOG_TAG, "biometric auth skipped: keypad context has no live Activity, app=${state.adapter.app}, context=${keyboardView.context.javaClass.name}")
-            LogCapture.log("biometric auth skipped: no live Activity context, app=${state.adapter.app}")
+            ModuleLog.w { "biometric auth skipped: keypad context has no live Activity, app=${state.adapter.app}, context=${keyboardView.context.javaClass.name}" }
             return false
         }
         if (PasswordAutoInput.isInProgress(sessionId)) return false
         val biometricType = config.biometricType
         if (biometricType !in BiometricType.BOTH..BiometricType.FACE) {
-            Log.w(LOG_TAG, "biometric auth skipped: no biometric method enabled, app=${state.adapter.app}")
+            ModuleLog.d { "biometric auth skipped: no biometric method enabled, app=${state.adapter.app}" }
             return false
         }
         val attempt = state.session.beginAuthentication() ?: return false
@@ -82,15 +79,14 @@ object BiometricAuth {
             if (!state.session.isCurrentAuthentication(attempt.id)) return false
             // INVISIBLE preserves external payment keyboard attachment and the active prompt.
             keyboardView.visibility = View.INVISIBLE
-            LogCapture.log("trigger: type=$biometricType, session=$sessionId, attempt=${attempt.id}")
+            ModuleLog.d { "trigger: type=$biometricType, session=$sessionId, attempt=${attempt.id}" }
             return true
         } catch (e: Throwable) {
             operation.ciphertext.fill(0)
             if (state.session.isCurrentSession(sessionId) && state.session.finishAuthentication(attempt.id)) {
                 state.session.restoreKeyboard(sessionId)
             }
-            Log.w(LOG_TAG, "biometric auth failed", e)
-            LogCapture.log("trigger: failed: ${e.message}")
+            ModuleLog.w(e) { "biometric auth failed" }
             return false
         }
     }
@@ -106,13 +102,13 @@ object BiometricAuth {
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
             operation.ciphertext.fill(0)
             if (!state.session.isCurrentSession(sessionId) || !state.session.finishAuthentication(attemptId)) return
-            LogCapture.log("onAuthError: code=$errorCode, attempt=$attemptId")
+            ModuleLog.d { "onAuthError: code=$errorCode, attempt=$attemptId" }
             state.session.restoreKeyboard(sessionId)
         }
 
         override fun onAuthenticationFailed() {
             if (state.session.isCurrentSession(sessionId) && state.session.isCurrentAuthentication(attemptId)) {
-                LogCapture.log("onAuthFailed: attempt=$attemptId")
+                ModuleLog.d { "onAuthFailed: attempt=$attemptId" }
             }
         }
 
@@ -121,7 +117,7 @@ object BiometricAuth {
                 operation.ciphertext.fill(0)
                 return
             }
-            LogCapture.log("onAuthSucceeded: attempt=$attemptId")
+            ModuleLog.d { "onAuthSucceeded: attempt=$attemptId" }
 
             finishInput()
         }
@@ -152,7 +148,7 @@ object BiometricAuth {
                     state.session.restoreKeyboard(sessionId)
                 }
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "post-authentication input failed", e)
+                ModuleLog.w(e) { "post-authentication input failed" }
                 state.session.restoreKeyboard(sessionId)
             } finally {
                 password?.fill('\u0000')

@@ -18,15 +18,14 @@
  */
 package io.github.kiriashi.biopay.payment
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.apps.VisualPaymentAdapter
 
 import android.os.SystemClock
-import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
@@ -181,7 +180,7 @@ object PasswordAutoInput {
                 if (activeRun === this) scheduleNext()
             } catch (e: Throwable) {
                 cancelPendingRunnables()
-                Log.w(LOG_TAG, "autoInput failed", e)
+                ModuleLog.w(e) { "autoInput failed" }
             }
         }
     }

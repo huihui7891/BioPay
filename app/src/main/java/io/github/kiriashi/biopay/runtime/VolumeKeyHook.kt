@@ -18,11 +18,8 @@
  */
 package io.github.kiriashi.biopay.runtime
 
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
-import io.github.kiriashi.biopay.apps.PaymentApp
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
-import android.util.Log
 import android.view.KeyEvent
 import io.github.libxposed.api.XposedInterface
 
@@ -30,29 +27,26 @@ object VolumeKeyHook {
 
     const val HOOK_ID = "bp_volume_key"
     const val DECOR_HOOK_ID = "bp_payment_decor_volume_key"
-    fun register(xposed: XposedInterface, state: AppRuntime) {
-        registerActivity(xposed, state)
-        if (state.adapter.app != PaymentApp.WECHAT) registerPaymentWindow(xposed, state)
-    }
-
-    fun registerActivity(xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun registerActivity(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val method = Activity::class.java.getDeclaredMethod(
                 "dispatchKeyEvent", KeyEvent::class.java
             )
             xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "register failed", e)
+            ModuleLog.w(e) { "register failed" }
+            null
         }
     }
 
-    fun registerPaymentWindow(xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun registerPaymentWindow(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val decor = Class.forName("com.android.internal.policy.DecorView")
             val method = decor.getDeclaredMethod("dispatchKeyEvent", KeyEvent::class.java)
             xposed.hook(method).setId(DECOR_HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "payment window volume key hook failed", e)
+            ModuleLog.w(e) { "payment window volume key hook failed" }
+            null
         }
     }
     fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker {
@@ -67,8 +61,7 @@ object VolumeKeyHook {
                     if (event != null) {
                         val keyCode = event.keyCode
                         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                            Log.d(LOG_TAG, "volume key intercepted: $keyCode, triggering toggle")
-                            LogCapture.log("volume key: $keyCode")
+                            ModuleLog.d { "volume key intercepted: $keyCode, triggering toggle" }
                             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                                 state.flow.toggleBetweenBiometricAndKeyboard()
                             }
@@ -77,7 +70,7 @@ object VolumeKeyHook {
                     }
                 }
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "volumeKey interceptor failed", e)
+                ModuleLog.w(e) { "volumeKey interceptor failed" }
             }
             chain.proceed()
         }

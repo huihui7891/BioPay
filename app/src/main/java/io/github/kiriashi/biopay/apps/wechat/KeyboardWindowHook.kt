@@ -18,24 +18,23 @@
  */
 package io.github.kiriashi.biopay.apps.wechat
 
-import android.util.Log
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.view.ViewGroup
 import android.widget.EditText
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.libxposed.api.XposedInterface
 
 object KeyboardWindowHook {
 
     const val HOOK_ID = "bp_keyboard_window"
-    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val clazz = cl.loadClass(HookTargets.MyKeyboardWindow)
             val method = clazz.getDeclaredMethod("setInputEditText", EditText::class.java)
             xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "register failed", e)
+            ModuleLog.w(e) { "register failed" }
+            null
         }
     }
     fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker {
@@ -57,12 +56,11 @@ object KeyboardWindowHook {
 
                 if (keyboardView != null) {
                     if (samePayment) return@Hooker result
-                    Log.d(LOG_TAG, "setInputEditText intercepted, view=${keyboardView.hashCode()}, biometricInProgress=${state.session.isAuthenticationInProgress()}")
-                    LogCapture.log("setInputEditText: view=${keyboardView.hashCode()}, inProgress=${state.session.isAuthenticationInProgress()}")
+                    ModuleLog.d { "setInputEditText intercepted, view=${keyboardView.hashCode()}, biometricInProgress=${state.session.isAuthenticationInProgress()}" }
                     state.flow.setupBiometricAuth(keyboardView, encodedPassword)
                 }
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "keyboardWindow interceptor failed", e)
+                ModuleLog.w(e) { "keyboardWindow interceptor failed" }
             }
             result
         }

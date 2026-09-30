@@ -19,7 +19,7 @@
 
 package io.github.kiriashi.biopay.runtime
 
-import io.github.kiriashi.biopay.core.log.LOG_TAG
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.apps.AppComponents
@@ -27,7 +27,6 @@ import android.app.Application
 import android.app.Instrumentation
 import android.os.Bundle
 import android.os.Handler
-import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModuleInterface.HotReloadedParam
@@ -47,6 +46,7 @@ class BioPayModule : XposedModule() {
     @Volatile private var targetPackageName: String? = null
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
+        ModuleLog.bind(param.processName) { priority, message -> log(priority, "bp", message) }
         processName = param.processName
         targetPackageName = paymentAppForProcess(param.processName)?.packageName
     }
@@ -61,19 +61,19 @@ class BioPayModule : XposedModule() {
 
         val loadingProcess = Application.getProcessName().takeIf(String::isNotBlank) ?: processName.orEmpty()
         if (!targetApp.handlesProcess(loadingProcess)) {
-            Log.d(LOG_TAG, "skipping non-payment process: $loadingProcess")
+            ModuleLog.d { "skipping non-payment process: $loadingProcess" }
             return
         }
         targetPackageName = targetApp.packageName
         processName = loadingProcess
-        Log.d(LOG_TAG, "package loaded, isFirstPkg=${param.isFirstPackage}, process=$processName")
+        ModuleLog.d { "package loaded, isFirstPkg=${param.isFirstPackage}, process=$processName" }
 
         hookApplicationOnCreate(targetApp)
     }
 
     override fun onHotReloading(param: HotReloadingParam): Boolean {
         val reloadProcess = processName.orEmpty()
-        log(Log.INFO, LOG_TAG, "hot reload: old generation entered for $reloadProcess")
+        ModuleLog.d { "hot reload: old generation entered for $reloadProcess" }
         val packageName = listOfNotNull(
             initializedApplication?.packageName,
             targetPackageName,
@@ -82,9 +82,9 @@ class BioPayModule : XposedModule() {
         if (packageName == null) {
             // Package state is optional for inactive child processes: the new
             // generation can derive it from its process name or discard old hooks.
-            log(Log.WARN, LOG_TAG, "hot reload: package metadata unavailable in $reloadProcess; continuing cleanup")
+            ModuleLog.d { "hot reload: package metadata unavailable in $reloadProcess; continuing cleanup" }
         } else {
-            log(Log.INFO, LOG_TAG, "hot reload: saving state for $packageName in $reloadProcess")
+            ModuleLog.d { "hot reload: saving state for $packageName in $reloadProcess" }
         }
         param.setSavedInstanceState(Bundle().apply {
             packageName?.let { putString(STATE_PACKAGE, it) }
@@ -95,7 +95,7 @@ class BioPayModule : XposedModule() {
             initializedApplication?.let { app ->
                 lifecycleCallbacks?.let { callbacks ->
                     app.unregisterActivityLifecycleCallbacks(callbacks)
-                    log(Log.INFO, LOG_TAG, "hot reload: lifecycle callbacks detached in $reloadProcess")
+                    ModuleLog.d { "hot reload: lifecycle callbacks detached in $reloadProcess" }
                 }
                 LogCapture.stop(app) { }
             }
@@ -104,16 +104,17 @@ class BioPayModule : XposedModule() {
             runtime = null
             initializedApplication = null
         } catch (e: Throwable) {
-            log(Log.ERROR, LOG_TAG, "hot reload: old generation cleanup failed in $reloadProcess", e)
+            ModuleLog.e(e) { "hot reload: old generation cleanup failed in $reloadProcess" }
             return false
         }
-        log(Log.INFO, LOG_TAG, "hot reload: old generation cleanup complete in $reloadProcess")
+        ModuleLog.d { "hot reload: old generation cleanup complete in $reloadProcess" }
         return true
     }
 
     override fun onHotReloaded(param: HotReloadedParam) {
         val reloadProcess = param.processName
-        log(Log.INFO, LOG_TAG, "hot reload: new generation entered for $reloadProcess; oldHooks=${param.oldHookHandles.size}")
+        ModuleLog.bind(reloadProcess) { priority, message -> log(priority, "bp", message) }
+        ModuleLog.d { "hot reload: new generation entered for $reloadProcess; oldHooks=${param.oldHookHandles.size}" }
         val savedState = param.savedInstanceState as? Bundle
         pendingSettings = savedState?.getBundle(STATE_SETTINGS)
         processName = savedState?.getString(STATE_PROCESS)?.takeIf(String::isNotBlank)
@@ -123,21 +124,14 @@ class BioPayModule : XposedModule() {
             ?: paymentAppForProcess(param.processName)?.packageName
         val targetApp = packageName?.let { PaymentApp.fromPackage(it) }
         if (targetApp == null) {
-            log(Log.WARN, LOG_TAG, "hot reload: no payment app for $reloadProcess; removing old hooks")
-            param.oldHookHandles.forEach { handle ->
-                runCatching { handle.unhook() }
-                    .onFailure { Log.w(LOG_TAG, "hot reload: stale hook removal failed (${handle.id})", it) }
-            }
-            Log.w(LOG_TAG, "hot reload: target payment app could not be restored")
+            ModuleLog.d { "hot reload: no payment app for $reloadProcess; removing old hooks" }
+            removeOldHooks(param.oldHookHandles)
             return
         }
         if (!targetApp.handlesProcess(processName.orEmpty())) {
-            log(Log.INFO, LOG_TAG, "hot reload: $reloadProcess is not an active payment process; removing old hooks")
-            param.oldHookHandles.forEach { handle ->
-                runCatching { handle.unhook() }
-                    .onFailure { Log.w(LOG_TAG, "hot reload: inactive-process hook removal failed (${handle.id})", it) }
-            }
-            Log.d(LOG_TAG, "hot reload: no payment runtime for ${processName.orEmpty()}")
+            ModuleLog.d { "hot reload: $reloadProcess is not an active payment process; removing old hooks" }
+            removeOldHooks(param.oldHookHandles)
+            ModuleLog.summary { "hot reload: inactive process hooks removed" }
             return
         }
         targetPackageName = targetApp.packageName
@@ -146,27 +140,31 @@ class BioPayModule : XposedModule() {
                 .getDeclaredMethod("currentApplication")
                 .invoke(null) as? Application
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "hot reload: failed to get Application via ActivityThread", e)
+            ModuleLog.w(e) { "hot reload: failed to get Application via ActivityThread" }
             null
         }?.takeIf { it.packageName == targetApp.packageName }
 
         if (app != null) {
-            log(Log.INFO, LOG_TAG, "hot reload: Application available for $reloadProcess; creating runtime")
+            ModuleLog.d { "hot reload: Application available for $reloadProcess; creating runtime" }
             val adapter = AppComponents.adapterFor(targetApp.packageName) ?: run {
-                log(Log.ERROR, LOG_TAG, "hot reload: no adapter for ${targetApp.packageName} in $reloadProcess")
+                ModuleLog.e { "hot reload: no adapter for ${targetApp.packageName} in $reloadProcess" }
                 return
             }
             runtime?.close()
-            val state = AppRuntime.create(app, adapter) { priority, message ->
-                log(priority, LOG_TAG, message)
-            }.also {
+            val state = AppRuntime.create(app, adapter).also {
                 it.prefs.restoreState(pendingSettings)
                 pendingSettings = null
                 runtime = it
             }
-            log(Log.INFO, LOG_TAG, "hot reload: replacing ${param.oldHookHandles.size} hooks in $reloadProcess")
-            HookManager.replaceHooksFromOldGeneration(param.oldHookHandles, this, state)
-            log(Log.INFO, LOG_TAG, "hot reload: hook replacement complete in $reloadProcess")
+            ModuleLog.d { "hot reload: replacing ${param.oldHookHandles.size} hooks in $reloadProcess" }
+            val hooks = HookManager.install(this, state, param.oldHookHandles)
+            if (!hooks.ready) {
+                hooks.report(reloading = true)
+                state.close()
+                runtime = null
+                hooks.rollback()
+                error("Required hooks could not be restored")
+            }
             initializedApplication = app
             applicationHooksRegistered = true
             lifecycleCallbacks = AppLifecycleCallbacks(state).also(app::registerActivityLifecycleCallbacks)
@@ -179,23 +177,23 @@ class BioPayModule : XposedModule() {
                 }
             }
             if (state.prefs.isLogCaptureEnabled()) LogCapture.start(app)
-            log(Log.INFO, LOG_TAG, "hot reload: ${targetApp.displayName} hooks restored in $reloadProcess")
+            hooks.report(reloading = true)
         } else {
             // A process may reload between package loading and Application creation.
             // Rebind the bootstrap hooks so new code, rather than the old classloader,
             // initializes the app when Application.onCreate eventually runs.
-            log(Log.INFO, LOG_TAG, "hot reload: Application unavailable in $reloadProcess; rebinding bootstrap hooks")
-            hookApplicationOnCreate(targetApp, param.oldHookHandles)
-            log(Log.INFO, LOG_TAG, "hot reload: waiting for ${targetApp.displayName} Application in $reloadProcess")
+            ModuleLog.d { "hot reload: Application unavailable in $reloadProcess; rebinding bootstrap hooks" }
+            check(hookApplicationOnCreate(targetApp, param.oldHookHandles)) { "Bootstrap hooks could not be restored" }
+            ModuleLog.summary { "hot reload: bootstrap hooks restored; awaiting Application" }
         }
     }
 
     private fun hookApplicationOnCreate(
         targetApp: PaymentApp,
         oldHandles: List<XposedInterface.HookHandle> = emptyList()
-    ) {
+    ): Boolean {
         synchronized(initLock) {
-            if (applicationHooksRegistered) return
+            if (applicationHooksRegistered) return true
             applicationHooksRegistered = true
         }
         val handled = HashSet<XposedInterface.HookHandle>()
@@ -210,15 +208,16 @@ class BioPayModule : XposedModule() {
                     installed = true
                     return
                 } catch (e: Throwable) {
-                    Log.w(LOG_TAG, "hot reload: replacing $id failed; reinstalling", e)
+                    ModuleLog.w(e) { "hot reload: replacing $id failed; reinstalling" }
                     if (runCatching { old.unhook() }.isSuccess) handled += old
+                    else return
                 }
             }
             try {
                 hook(method).setId(id).intercept(interceptor)
                 installed = true
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "$id hook registration failed", e)
+                ModuleLog.w(e) { "$id hook registration failed" }
             }
         }
 
@@ -228,13 +227,13 @@ class BioPayModule : XposedModule() {
                 try {
                     (chain.thisObject as? Application)?.let { initializeApplication(it, targetApp) }
                 } catch (e: Throwable) {
-                    Log.w(LOG_TAG, "init failed", e)
+                    ModuleLog.w(e) { "init failed" }
                 }
                 chain.proceed()
             })
-            Log.d(LOG_TAG, "hookApplicationOnCreate registered")
+            ModuleLog.d { "hookApplicationOnCreate registered" }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "hook onCreate failed", e)
+            ModuleLog.w(e) { "hook onCreate failed" }
         }
         if (targetApp == PaymentApp.ALIPAY || targetApp == PaymentApp.TAOBAO) {
             try {
@@ -247,26 +246,28 @@ class BioPayModule : XposedModule() {
                             initializeApplication(it, targetApp)
                         }
                     } catch (e: Throwable) {
-                        Log.w(LOG_TAG, "instrumentation init failed", e)
+                        ModuleLog.w(e) { "instrumentation init failed" }
                     }
                     chain.proceed()
                 })
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "hook callApplicationOnCreate failed", e)
+                ModuleLog.w(e) { "hook callApplicationOnCreate failed" }
             }
         }
 
+        var stale = 0
         oldHandles.filterNot { it in handled }.forEach { old ->
             runCatching { old.unhook() }
-                .onFailure { Log.w(LOG_TAG, "hot reload: stale hook removal failed (${old.id})", it) }
+                .onFailure { stale++; ModuleLog.w(it) { "hot reload: stale hook removal failed (${old.id})" } }
         }
         if (!installed) synchronized(initLock) { applicationHooksRegistered = false }
+        return installed && stale == 0
     }
 
     private fun initializeApplication(application: Application, targetApp: PaymentApp) {
         val currentProcessName = Application.getProcessName()
         if (!targetApp.handlesProcess(currentProcessName) || application.packageName != targetApp.packageName) {
-            Log.d(LOG_TAG, "skipping non-payment process: $currentProcessName")
+            ModuleLog.d { "skipping non-payment process: $currentProcessName" }
             return
         }
         synchronized(initLock) {
@@ -274,22 +275,38 @@ class BioPayModule : XposedModule() {
             // lifecycle callbacks observe the same Activities, so keep one state.
             if (initializedApplication != null) return
             val adapter = AppComponents.adapterFor(targetApp.packageName) ?: return
-            val state = AppRuntime.create(application, adapter) { priority, message ->
-                log(priority, LOG_TAG, message)
-            }.also {
+            val state = AppRuntime.create(application, adapter).also {
                 it.prefs.restoreState(pendingSettings)
                 pendingSettings = null
                 runtime = it
             }
-            HookManager.init(application.classLoader, this, state)
+            val hooks = HookManager.install(this, state)
+            if (!hooks.ready) {
+                hooks.report(reloading = false)
+                state.close()
+                runtime = null
+                hooks.rollback()
+                return
+            }
             lifecycleCallbacks = AppLifecycleCallbacks(state)
                 .also(application::registerActivityLifecycleCallbacks)
             if (state.prefs.isLogCaptureEnabled()) LogCapture.start(application)
             initializedApplication = application
             targetPackageName = targetApp.packageName
             this.processName = this.processName ?: currentProcessName
-            Log.i(LOG_TAG, "${targetApp.displayName} payment hooks initialized in $currentProcessName")
+            hooks.report(reloading = false)
         }
+    }
+
+    private fun removeOldHooks(handles: List<XposedInterface.HookHandle>) {
+        var failures = 0
+        handles.forEach { handle ->
+            runCatching { handle.unhook() }.onFailure {
+                failures++
+                ModuleLog.w(it) { "hot reload: stale hook removal failed (${handle.id})" }
+            }
+        }
+        check(failures == 0) { "Old hooks could not be removed" }
     }
 
     private fun paymentAppForProcess(name: String): PaymentApp? =

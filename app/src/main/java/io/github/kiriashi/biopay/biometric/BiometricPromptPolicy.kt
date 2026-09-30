@@ -34,7 +34,7 @@ internal object BiometricPromptPolicy {
                 }
             )
         }
-        if (biometricType == BiometricType.FACE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (biometricType == BiometricType.FACE) {
             builder.setConfirmationRequired(false)
         }
         return builder

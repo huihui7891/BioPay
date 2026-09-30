@@ -18,16 +18,13 @@
  */
 package io.github.kiriashi.biopay.apps.wechat
 
-import android.util.Log
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.TextView
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.isValidActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
-import io.github.kiriashi.biopay.runtime.FieldStore
-import io.github.kiriashi.biopay.settings.SettingsDialog
 import io.github.libxposed.api.XposedInterface
 
 object PullDownHook {
@@ -35,8 +32,8 @@ object PullDownHook {
     const val HOOK_ID = "bp_pull_down"
 
     private val SETTINGS_TEXTS = arrayOf("设置", "設定", "Settings")
-    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val clazz = cl.loadClass(HookTargets.PullDownListView)
             val method = clazz.getDeclaredMethod(
                 "onItemLongClick",
@@ -45,7 +42,8 @@ object PullDownHook {
             )
             xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "register failed", e)
+            ModuleLog.w(e) { "register failed" }
+            null
         }
     }
     fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker {
@@ -53,20 +51,10 @@ object PullDownHook {
             try {
                 val view = chain.args[1] as? View
                 if (view != null && view.context.isValidActivity() && containsSettingsText(view)) {
-                    val ctx = view.context
-                    if (!state.fields.compareAndSetField(ctx, FieldStore.SETTINGS_DIALOG, false, true)) {
-                        return@Hooker true
-                    }
-                    try {
-                        if (SettingsDialog.show(ctx, state)) return@Hooker true
-                        state.fields.removeField(ctx, FieldStore.SETTINGS_DIALOG)
-                    } catch (e: Throwable) {
-                        state.fields.removeField(ctx, FieldStore.SETTINGS_DIALOG)
-                        Log.w(LOG_TAG, "pullDown settings dialog failed", e)
-                    }
+                    if (state.showSettings(view.context)) return@Hooker true
                 }
             } catch (e: Throwable) {
-                Log.w(LOG_TAG, "pullDown interceptor failed", e)
+                ModuleLog.w(e) { "pullDown interceptor failed" }
             }
             chain.proceed()
         }

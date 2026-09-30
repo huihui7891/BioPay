@@ -8,6 +8,12 @@ package io.github.kiriashi.biopay.runtime
 import android.app.Application
 import android.app.Activity
 import android.content.Context
+import android.os.Looper
+import io.github.kiriashi.biopay.core.log.ModuleLog
+import io.github.kiriashi.biopay.core.util.MainTasks
+import io.github.kiriashi.biopay.settings.DialogHost
+import io.github.kiriashi.biopay.settings.SettingsDialog
+import java.util.IdentityHashMap
 import io.github.kiriashi.biopay.apps.PaymentAdapter
 import io.github.kiriashi.biopay.apps.VisualPaymentAdapter
 import io.github.kiriashi.biopay.apps.PaymentApp
@@ -25,8 +31,7 @@ import io.github.kiriashi.biopay.storage.ConfigStore
 /** Owns the collaborators and cleanup for one payment app process. */
 class AppRuntime private constructor(
     val app: Application,
-    val adapter: PaymentAdapter,
-    private val report: (Int, String) -> Unit
+    val adapter: PaymentAdapter
 ) {
     @Volatile private var closed = false
     val isClosed: Boolean get() = closed
@@ -37,7 +42,9 @@ class AppRuntime private constructor(
     )
     val flow = PaymentFlow(this)
     val session = PaymentSession(onDestroy = flow::reset)
-    val fields = FieldStore()
+    private val uiTasks = MainTasks()
+    private val dialogs = IdentityHashMap<Activity, DialogHost>()
+
     private val entryInstaller = if (adapter is VisualPaymentAdapter) {
         AppComponents.entryFor(adapter.app)?.let { EntryInstaller(this, it) }
     } else null
@@ -47,7 +54,30 @@ class AppRuntime private constructor(
     }
     val visualMonitor: VisualPaymentMonitor? get() = if (closed) null else monitor.value
 
+    fun showSettings(context: Context): Boolean {
+        if (closed || Looper.myLooper() != Looper.getMainLooper()) return false
+        val activity = context.findActivity() ?: return false
+        if (activity.isFinishing || activity.isDestroyed) return false
+        if (dialogs.containsKey(activity)) return true
+        val host = DialogHost(activity)
+        dialogs[activity] = host
+        host.onDismiss = {
+            if (dialogs[activity] === host) dialogs.remove(activity)
+        }
+        return try {
+            SettingsDialog.show(activity, host, this).also {
+                if (!it) { dialogs.remove(activity); host.dismiss() }
+            }
+        } catch (error: Throwable) {
+            dialogs.remove(activity)
+            host.dismiss()
+            ModuleLog.w(error) { "settings dialog failed" }
+            false
+        }
+    }
+
     fun onActivityCreated(activity: Activity) {
+        if (closed) return
         val name = activity.javaClass.name
         if ((adapter.app == PaymentApp.TAOBAO && TAOBAO_SETTINGS_ACTIVITIES.any(name::endsWith)) ||
             (adapter.app == PaymentApp.UNIONPAY && name.endsWith(".UPActivityReactNative"))) {
@@ -56,6 +86,8 @@ class AppRuntime private constructor(
     }
 
     fun watchActivity(activity: Activity) {
+        if (closed) return
+        prefs.refresh()
         if (shouldInstallEntry(activity)) {
             entryInstaller?.installWhenReady(activity)
             if (adapter.app == PaymentApp.TAOBAO) {
@@ -80,7 +112,7 @@ class AppRuntime private constructor(
             ) continue
 
             activity.runOnUiThread {
-                if (!activity.isFinishing && !activity.isDestroyed && shouldInstallEntry(activity)) {
+                if (!closed && !activity.isFinishing && !activity.isDestroyed && shouldInstallEntry(activity)) {
                     entryInstaller?.installWhenReady(activity)
                 }
             }
@@ -99,16 +131,14 @@ class AppRuntime private constructor(
     }
 
     fun stopActivity(activity: Activity, destroyed: Boolean = false) {
+        if (closed) return
         if (destroyed) {
+            dialogs.remove(activity)?.dismiss()
             entryInstaller?.removeActivity(activity)
         } else if (adapter.app == PaymentApp.TAOBAO) {
             entryInstaller?.stopWatching(activity)
         }
         visualMonitor?.stopActivity(activity, destroyed)
-    }
-
-    internal fun diagnostic(priority: Int, message: String) {
-        runCatching { report(priority, message) }
     }
 
     fun installEntry(activity: Activity) {
@@ -124,6 +154,12 @@ class AppRuntime private constructor(
     fun close() {
         if (closed) return
         closed = true
+        uiTasks.close()
+        uiTasks.onMain {
+            val active = dialogs.values.toList()
+            dialogs.clear()
+            active.forEach { it.dismiss() }
+        }
         if (adapter.app == PaymentApp.QQ) QqMenuEntryHook.cancelPendingRetries()
         if (monitor.isInitialized()) monitor.value?.close()
         entryInstaller?.close()
@@ -137,11 +173,10 @@ class AppRuntime private constructor(
         )
         fun create(
             app: Application,
-            adapter: PaymentAdapter,
-            report: (Int, String) -> Unit = { _, _ -> }
+            adapter: PaymentAdapter
         ): AppRuntime {
             require(app.packageName == adapter.app.packageName)
-            return AppRuntime(app, adapter, report)
+            return AppRuntime(app, adapter)
         }
     }
 }

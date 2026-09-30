@@ -67,6 +67,10 @@ jobs:
           python3 .github/scripts/generate_changelog.py
           cat changelog.txt
 
+      - name: Validate Gradle wrapper
+        if: steps.check_version.outputs.changed == 'true'
+        uses: gradle/actions/wrapper-validation@v5
+
       - name: Set up Java
         if: steps.check_version.outputs.changed == 'true'
         uses: actions/setup-java@v5
@@ -95,7 +99,7 @@ jobs:
           BIOPAY_RELEASE_KEY_ALIAS: ${{ secrets.BIOPAY_RELEASE_KEY_ALIAS }}
           BIOPAY_RELEASE_KEY_PASSWORD: ${{ secrets.BIOPAY_RELEASE_KEY_PASSWORD }}
         run: |
-          ./gradlew assembleRelease
+          ./gradlew lintRelease assembleRelease --warning-mode fail
           APK_DIR="app/build/outputs/apk"
           mv "$APK_DIR/release/app-release.apk" "$APK_DIR/BioPay-${{ steps.check_version.outputs.tag }}.apk"
           ls -lh "$APK_DIR"

@@ -5,8 +5,8 @@
  */
 package io.github.kiriashi.biopay.apps.alipay
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -19,7 +19,6 @@ import io.github.kiriashi.biopay.apps.shared.ancestor
 import io.github.kiriashi.biopay.apps.shared.findByEntryName
 import io.github.kiriashi.biopay.apps.shared.findText
 import io.github.kiriashi.biopay.apps.shared.versionCode
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.core.util.dp
 import java.lang.ref.WeakReference
 
@@ -164,7 +163,7 @@ private fun EntryInstaller.insertListHeader(
         }
         true
     } catch (e: Throwable) {
-        Log.d(LOG_TAG, "settings list cannot accept a header", e)
+        ModuleLog.d(e) { "settings list cannot accept a header" }
         false
     }
 }

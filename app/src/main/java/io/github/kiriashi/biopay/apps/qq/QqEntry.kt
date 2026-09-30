@@ -5,6 +5,7 @@
  */
 package io.github.kiriashi.biopay.apps.qq
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
 import android.content.Context
 import android.graphics.Canvas
@@ -24,8 +25,6 @@ import io.github.kiriashi.biopay.apps.shared.findVisibleText
 import io.github.kiriashi.biopay.apps.shared.visitViews
 import io.github.kiriashi.biopay.apps.shared.toSp
 import io.github.kiriashi.biopay.core.util.dp
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import android.util.Log
 import java.lang.ref.WeakReference
 
 private const val QQ_ICON_PERSON_SCALE = 0.81f
@@ -105,7 +104,7 @@ internal fun EntryInstaller.installQqMenu(activity: Activity, root: ViewGroup): 
         rowRef.get()?.let { inserted -> (inserted.parent as? ViewGroup)?.removeView(inserted) }
         restorePopupSize()
     }
-    Log.d(LOG_TAG, "QQ chat action menu entry inserted below 收付款")
+    ModuleLog.d { "QQ chat action menu entry inserted below 收付款" }
     return true
 }
 

@@ -18,33 +18,31 @@
  */
 package io.github.kiriashi.biopay.apps.wechat
 
-import android.util.Log
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.libxposed.api.XposedInterface
 
 object FingerprintTipHook {
     const val HOOK_ID = "bp_fingerprint_error"
 
-    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun register(cl: ClassLoader, xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val dialog = cl.loadClass(HookTargets.AlertDialogImpl)
             val callback = cl.loadClass(HookTargets.VoidCallback)
             val method = dialog.getDeclaredMethod(
                 "showTipsImpl", String::class.java, String::class.java, String::class.java, callback
             )
             TopActivityProvider.resolve(cl)
-            xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(xposed, state))
-            xposed.log(Log.INFO, LOG_TAG, "Fingerprint tip hook installed")
+            xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            xposed.log(Log.ERROR, LOG_TAG, "Fingerprint tip hook unavailable", e)
+            ModuleLog.e(e) { "Fingerprint tip hook unavailable" }
+            null
         }
     }
 
-    fun makeInterceptor(xposed: XposedInterface, state: AppRuntime): XposedInterface.Hooker {
+    fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker {
         val recovery = FingerprintTipRecovery { failure ->
-            xposed.log(Log.WARN, LOG_TAG, "Fingerprint tip: page continuation failed", failure)
+            ModuleLog.w(failure) { "Fingerprint tip: page continuation failed" }
         }
         return XposedInterface.Hooker { chain ->
             val suppress = recovery.suppressIfMatched(
@@ -59,13 +57,13 @@ object FingerprintTipHook {
                     WeChatPaymentContinuation.resolvePage(page)?.let { action ->
                         {
                             action()
-                            xposed.log(Log.INFO, LOG_TAG, "Fingerprint tip: continued WeChat page")
+                            ModuleLog.d { "Fingerprint tip: continued WeChat page" }
                         }
                     }
                 }
             )
             if (suppress) {
-                LogCapture.log("Fingerprint tip: suppressed known WeChat tip")
+                ModuleLog.d { "Fingerprint tip: suppressed known WeChat tip" }
                 null
             } else {
                 chain.proceed()

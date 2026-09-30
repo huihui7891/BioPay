@@ -22,7 +22,6 @@ package io.github.kiriashi.biopay.settings
 import io.github.kiriashi.biopay.BuildConfig
 import io.github.kiriashi.biopay.core.util.dp
 import io.github.kiriashi.biopay.core.util.isValidActivity
-import io.github.kiriashi.biopay.runtime.FieldStore
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.kiriashi.biopay.biometric.BiometricType
 import io.github.kiriashi.biopay.settings.ui.M3Field
@@ -51,11 +50,9 @@ import android.widget.TextView
 
 object SettingsDialog {
 
-    fun show(context: Context, state: AppRuntime): Boolean {
+    fun show(context: Context, dialogHost: DialogHost, state: AppRuntime): Boolean {
         if (state.isClosed || !context.isValidActivity()) return false
-        val dialogHost = DialogHost(context)
         val layout = createDialogContent(context, dialogHost, state)
-        dialogHost.onDismiss = { state.fields.removeField(context, FieldStore.SETTINGS_DIALOG) }
         return dialogHost.show(layout)
     }
 
@@ -121,9 +118,7 @@ object SettingsDialog {
         clearBtn.setOnLongClickListener {
             it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             SettingsActions.authenticateWithBiometric(context, dialogHost, state, "清除密码，生物支付已关闭") {
-                SettingsActions.handleClearPassword(state).also { cleared ->
-                    if (!cleared) SettingsActions.showToast(context, "清除失败，请重试")
-                }
+                SettingsActions.handleClearPassword(state)
             }
             true
         }
@@ -151,9 +146,9 @@ object SettingsDialog {
             root.addView(logCard)
 
             toggleLog.onCheckedChangeListener = { enabled ->
-                val message = SettingsActions.setLogCaptureEnabled(context, state, enabled)
-                if (message == null) toggleLog.setCheckedSilently(!enabled)
-                SettingsActions.showToast(context, message ?: "保存失败，请重试")
+                SettingsActions.setLogCaptureEnabled(context, dialogHost, state, enabled) { saved ->
+                    if (!saved) toggleLog.setCheckedSilently(!enabled)
+                }
             }
         }
 
@@ -248,7 +243,7 @@ object SettingsDialog {
             })
             addView(View(context), LinearLayout.LayoutParams(0, 0, 1f))
             addView(makeBtn(context, "取消", t.surfaceContainerHighest, t.onSurface, t.disabledRipple, context.dp(8)) {
-                SettingsActions.dismissDialog(context, dialogHost, state)
+                SettingsActions.dismissDialog(dialogHost)
             })
             addView(makeBtn(context, "保存", t.primary, t.onPrimary, t.ripple, 0) {
                 SettingsActions.handleSave(context, dialogHost, pwdInput, state, getSelectedType())

@@ -1,131 +1,136 @@
 /*
  * BioPay - biometric payment assistance for supported payment apps.
- *
  * Copyright (C) 2026 kiriashi
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 package io.github.kiriashi.biopay.runtime
 
 import android.app.Application
+import io.github.kiriashi.biopay.apps.PaymentApp
+import io.github.kiriashi.biopay.apps.qq.QqMenuEntryHook
 import io.github.kiriashi.biopay.apps.wechat.FingerprintTipHook
 import io.github.kiriashi.biopay.apps.wechat.KeyboardWindowHook
 import io.github.kiriashi.biopay.apps.wechat.PullDownHook
 import io.github.kiriashi.biopay.apps.wechat.TopActivityProvider
-import io.github.kiriashi.biopay.apps.qq.QqMenuEntryHook
-
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import android.util.Log
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.libxposed.api.XposedInterface
-import io.github.kiriashi.biopay.apps.PaymentApp
 
+/** Uses the same installation plan for process startup and module replacement. */
 object HookManager {
+    internal class Result(
+        val handles: List<XposedInterface.HookHandle>,
+        val missingRequired: List<String>,
+        val missingOptional: List<String>,
+        val staleHooks: Int
+    ) {
+        val ready: Boolean get() = missingRequired.isEmpty() && staleHooks == 0
 
-
-    fun init(classLoader: ClassLoader, xposed: XposedInterface, state: AppRuntime) {
-        Log.d(LOG_TAG, "HookManager.init classLoader=${classLoader.javaClass.name}@${Integer.toHexString(classLoader.hashCode())}")
-        if (state.adapter.app == PaymentApp.WECHAT) {
-            PullDownHook.register(classLoader, xposed, state)
-            KeyboardWindowHook.register(classLoader, xposed, state)
-            FingerprintTipHook.register(classLoader, xposed, state)
-        } else {
-            DialogShowHook.register(xposed, state)
-            PaymentActivityLifecycleHook.register(xposed, state)
-            if (usesQqMenuHook(state)) QqMenuEntryHook.register(xposed, state)
-            else PaymentWindowHook.register(xposed, state)
+        fun report(reloading: Boolean) {
+            val operation = if (reloading) "hot reload" else "initialization"
+            when {
+                !ready -> ModuleLog.e {
+                    "$operation failed: required=$missingRequired; stale=$staleHooks"
+                }
+                missingOptional.isNotEmpty() -> ModuleLog.w {
+                    "$operation degraded: optional=$missingOptional; installed=${handles.size}"
+                }
+                reloading -> ModuleLog.summary { "hot reload: ${handles.size} hooks restored" }
+                else -> ModuleLog.d { "initialization: ${handles.size} hooks installed" }
+            }
         }
-        VolumeKeyHook.register(xposed, state)
-        InputFeedbackHook.targets(state).forEach { InputFeedbackHook.register(xposed, it) }
+
+        fun rollback() {
+            handles.forEach { handle ->
+                runCatching { handle.unhook() }.onFailure {
+                    ModuleLog.w(it) { "failed to roll back hook ${handle.id}" }
+                }
+            }
+        }
     }
 
-    fun replaceHooksFromOldGeneration(
-        oldHandles: List<XposedInterface.HookHandle>,
+    internal fun install(
         xposed: XposedInterface,
-        state: AppRuntime
-    ) {
+        state: AppRuntime,
+        oldHandles: List<XposedInterface.HookHandle> = emptyList()
+    ): Result {
         val app = state.adapter.app
-        if (app == PaymentApp.WECHAT) TopActivityProvider.resolveFromHandles(oldHandles, state.app.classLoader)
-        else TopActivityProvider.reset()
+        val cl = state.app.classLoader
+        if (app == PaymentApp.WECHAT && oldHandles.isNotEmpty()) {
+            TopActivityProvider.resolveFromHandles(oldHandles, cl)
+        } else if (app != PaymentApp.WECHAT) TopActivityProvider.reset()
 
         val handled = HashSet<XposedInterface.HookHandle>()
+        val installed = mutableListOf<XposedInterface.HookHandle>()
+        val required = mutableListOf<String>()
+        val optional = mutableListOf<String>()
 
-        fun bind(id: String, interceptor: XposedInterface.Hooker, register: () -> Unit) {
+        fun bind(
+            id: String,
+            necessary: Boolean = false,
+            interceptor: XposedInterface.Hooker,
+            register: () -> XposedInterface.HookHandle?
+        ) {
             val old = oldHandles.firstOrNull { it.id == id && it !in handled }
             if (old != null) {
                 try {
                     old.replaceHook(interceptor)
                     handled += old
+                    installed += old
                     return
-                } catch (e: Throwable) {
-                    Log.w(LOG_TAG, "hot reload: replacing $id failed; reinstalling", e)
-                    val removed = runCatching { old.unhook() }.isSuccess
-                    if (removed) handled += old
+                } catch (error: Throwable) {
+                    ModuleLog.w(error) { "hot reload: replacing $id failed; reinstalling" }
+                    if (runCatching { old.unhook() }.isSuccess) {
+                        handled += old
+                    } else {
+                        // Do not add a duplicate interceptor while its predecessor remains attached.
+                        if (necessary) required += id else optional += id
+                        return
+                    }
                 }
             }
-            register()
+            val handle = runCatching(register).onFailure {
+                ModuleLog.w(it) { "hook installation failed: $id" }
+            }.getOrNull()
+            if (handle != null) installed += handle
+            else if (necessary) required += id else optional += id
         }
 
-        fun discard(id: String) {
-            oldHandles.filter { it.id == id && it !in handled }.forEach { old ->
-                runCatching { old.unhook() }
-                    .onFailure { Log.w(LOG_TAG, "hot reload: removing obsolete $id failed", it) }
-                handled += old
-            }
-        }
-
-        // These bootstrap hooks are only needed before Application.onCreate. The
-        // current Application already exists in this rebind path.
-        discard("bp_app_oncreate")
-        discard("bp_instrumentation_app_oncreate")
-
-        bind(VolumeKeyHook.HOOK_ID, VolumeKeyHook.makeInterceptor(state)) {
+        bind(VolumeKeyHook.HOOK_ID, interceptor = VolumeKeyHook.makeInterceptor(state)) {
             VolumeKeyHook.registerActivity(xposed, state)
         }
-
         if (app == PaymentApp.WECHAT) {
-            bind(PullDownHook.HOOK_ID, PullDownHook.makeInterceptor(state)) {
-                state.app.classLoader?.let { PullDownHook.register(it, xposed, state) }
+            bind(PullDownHook.HOOK_ID, interceptor = PullDownHook.makeInterceptor(state)) {
+                PullDownHook.register(cl, xposed, state)
             }
-            bind(KeyboardWindowHook.HOOK_ID, KeyboardWindowHook.makeInterceptor(state)) {
-                state.app.classLoader?.let { KeyboardWindowHook.register(it, xposed, state) }
+            bind(KeyboardWindowHook.HOOK_ID, true, KeyboardWindowHook.makeInterceptor(state)) {
+                KeyboardWindowHook.register(cl, xposed, state)
             }
-            bind(FingerprintTipHook.HOOK_ID, FingerprintTipHook.makeInterceptor(xposed, state)) {
-                state.app.classLoader?.let { FingerprintTipHook.register(it, xposed, state) }
+            bind(FingerprintTipHook.HOOK_ID, interceptor = FingerprintTipHook.makeInterceptor(state)) {
+                FingerprintTipHook.register(cl, xposed, state)
             }
         } else {
-            bind(DialogShowHook.HOOK_ID, DialogShowHook.makeInterceptor(state)) {
+            bind(DialogShowHook.HOOK_ID, interceptor = DialogShowHook.makeInterceptor(state)) {
                 DialogShowHook.register(xposed, state)
             }
-            if (usesQqMenuHook(state)) {
-                bind(QqMenuEntryHook.HOOK_ID, QqMenuEntryHook.makeInterceptor(state)) {
+            if (app == PaymentApp.QQ && Application.getProcessName() == state.app.packageName) {
+                bind(QqMenuEntryHook.HOOK_ID, true, QqMenuEntryHook.makeInterceptor(state)) {
                     QqMenuEntryHook.registerAddView(xposed, state)
                 }
-                bind(QqMenuEntryHook.SHOW_DROPDOWN_ID, QqMenuEntryHook.makePopupInterceptor(state)) {
+                bind(QqMenuEntryHook.SHOW_DROPDOWN_ID, interceptor = QqMenuEntryHook.makePopupInterceptor(state)) {
                     QqMenuEntryHook.registerShowDropdown(xposed, state)
                 }
-                bind(QqMenuEntryHook.SHOW_LOCATION_ID, QqMenuEntryHook.makePopupInterceptor(state)) {
+                bind(QqMenuEntryHook.SHOW_LOCATION_ID, interceptor = QqMenuEntryHook.makePopupInterceptor(state)) {
                     QqMenuEntryHook.registerShowLocation(xposed, state)
                 }
-                bind(QqMenuEntryHook.DISMISS_ID, QqMenuEntryHook.makeDismissInterceptor()) {
+                bind(QqMenuEntryHook.DISMISS_ID, interceptor = QqMenuEntryHook.makeDismissInterceptor()) {
                     QqMenuEntryHook.registerDismiss(xposed, state)
                 }
             } else {
-                bind(PaymentWindowHook.HOOK_ID, PaymentWindowHook.interceptor(state)) {
+                bind(PaymentWindowHook.HOOK_ID, true, PaymentWindowHook.interceptor(state)) {
                     PaymentWindowHook.register(xposed, state)
                 }
             }
-            bind(VolumeKeyHook.DECOR_HOOK_ID, VolumeKeyHook.makeInterceptor(state)) {
+            bind(VolumeKeyHook.DECOR_HOOK_ID, interceptor = VolumeKeyHook.makeInterceptor(state)) {
                 VolumeKeyHook.registerPaymentWindow(xposed, state)
             }
             val resumeId = when (app) {
@@ -134,27 +139,25 @@ object HookManager {
                 else -> null
             }
             if (resumeId != null) {
-                bind(resumeId, PaymentActivityLifecycleHook.makeInterceptor(state)) {
+                bind(resumeId, true, PaymentActivityLifecycleHook.makeInterceptor(state)) {
                     PaymentActivityLifecycleHook.register(xposed, state)
                 }
             }
         }
-
         InputFeedbackHook.targets(state).forEach { method ->
-            bind(InputFeedbackHook.id(method), InputFeedbackHook.interceptor()) {
+            bind(InputFeedbackHook.id(method), interceptor = InputFeedbackHook.interceptor()) {
                 InputFeedbackHook.register(xposed, method)
             }
         }
 
-        // Remove handles from retired or unrecognized generations. Leaving one
-        // attached would keep its old module classloader and runtime alive.
+        // Includes retired bootstrap hooks and duplicate IDs from older generations.
+        var stale = 0
         oldHandles.filterNot { it in handled }.forEach { old ->
-            runCatching { old.unhook() }
-                .onFailure { Log.w(LOG_TAG, "hot reload: removing stale hook ${old.id} failed", it) }
+            runCatching { old.unhook() }.onFailure {
+                stale++
+                ModuleLog.w(it) { "hot reload: removing stale hook ${old.id} failed" }
+            }
         }
-        Log.d(LOG_TAG, "hot reload: rebound hooks for ${app.displayName}; ${oldHandles.size} old handles")
+        return Result(installed, required, optional, stale)
     }
-
-    private fun usesQqMenuHook(state: AppRuntime): Boolean =
-        state.adapter.app == PaymentApp.QQ && Application.getProcessName() == state.app.packageName
 }

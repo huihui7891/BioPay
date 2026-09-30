@@ -19,12 +19,11 @@
 
 package io.github.kiriashi.biopay.storage
 
-import io.github.kiriashi.biopay.core.log.LOG_TAG
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -71,7 +70,7 @@ object PasswordCipher {
                 return (getKeyStore().getKey(keyAlias, null) as SecretKey).also { secretKey = it }
             } catch (e: Throwable) {
                 if (e is KeyPermanentlyInvalidatedException || e.cause is KeyPermanentlyInvalidatedException) {
-                    Log.w(LOG_TAG, "encryption key invalidated; clearing key")
+                    ModuleLog.w { "encryption key invalidated; clearing key" }
                     getKeyStore().deleteEntry(keyAlias)
                     secretKey = null
                     throw IllegalStateException("encryption key invalidated", e)
@@ -104,9 +103,9 @@ object PasswordCipher {
         updateAAD(associatedData(packageName))
     }
 
-    fun encrypt(plainText: String, cipher: Cipher): String {
-        require(plainText.length == PASSWORD_LENGTH && plainText.all { it in '0'..'9' }) { "Invalid password length" }
-        val bytes = plainText.toByteArray(Charsets.UTF_8)
+    fun encrypt(plainText: CharArray, cipher: Cipher): String {
+        require(plainText.size == PASSWORD_LENGTH && plainText.all { it in '0'..'9' }) { "Invalid password length" }
+        val bytes = ByteArray(plainText.size) { plainText[it].code.toByte() }
         return try {
             val encrypted = cipher.doFinal(bytes)
             BOUND_PREFIX + Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
@@ -135,7 +134,7 @@ object PasswordCipher {
             }
             DecryptOperation(cipher, ciphertext)
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "failed to prepare password decryption", e)
+            ModuleLog.w(e) { "failed to prepare password decryption" }
             null
         }
     }
@@ -147,7 +146,7 @@ object PasswordCipher {
             if (bytes.size != PASSWORD_LENGTH || bytes.any { it.toInt() !in 48..57 }) return null
             CharArray(bytes.size) { i -> (bytes!![i].toInt() and 0xff).toChar() }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "password decryption failed", e)
+            ModuleLog.w(e) { "password decryption failed" }
             null
         } finally {
             bytes?.fill(0)

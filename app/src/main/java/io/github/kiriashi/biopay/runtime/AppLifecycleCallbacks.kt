@@ -40,7 +40,6 @@ class AppLifecycleCallbacks(private val state: AppRuntime) : Application.Activit
     override fun onActivityDestroyed(activity: Activity) {
         state.stopActivity(activity, destroyed = true)
         state.session.endSessionForActivity(activity)
-        state.fields.cleanupActivity(activity)
     }
 
 }

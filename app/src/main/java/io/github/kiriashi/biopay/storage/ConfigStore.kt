@@ -19,13 +19,12 @@
 
 package io.github.kiriashi.biopay.storage
 
-import io.github.kiriashi.biopay.core.log.LOG_TAG
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.biometric.BiometricType
 import io.github.kiriashi.biopay.apps.PaymentApp
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.util.Log
 
 private const val KEY_LOG_CAPTURE = "log_capture"
 
@@ -35,15 +34,74 @@ class ConfigStore(
     private val app: PaymentApp
 ) {
 
-    private val sync = ConfigSync(context, pref, app)
+    private val queueLock = Any()
+    private val writeLock = Any()
+    @Volatile private var closed = false
+    @Volatile private var snapshot = readPreferences()
+    private data class ActiveSnapshot(val settings: PaymentSettings, val config: PaymentConfig?)
+    @Volatile private var active: ActiveSnapshot? = null
+    private val executor = context.mainExecutor
+    private val worker = lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+            Thread(task, "BioPaySettings")
+        }
+    }
+    private val sync = ConfigSync(context, app, ::localSettings, ::background)
 
-    fun close() = sync.close()
+    fun close() {
+        synchronized(queueLock) {
+            closed = true
+            if (worker.isInitialized()) worker.value.shutdown()
+        }
+        synchronized(writeLock) { sync.close() }
+    }
 
-    internal fun saveState(): Bundle? = sync.saveState(::localSettings)
+    fun refresh() { if (!closed) sync.refresh() }
+
+    private fun background(task: () -> Unit, cleanup: () -> Unit) = synchronized(queueLock) {
+        if (closed) { cleanup(); return@synchronized }
+        try {
+            worker.value.execute {
+                try {
+                    if (!closed) task()
+                } catch (error: Exception) {
+                    ModuleLog.w(error) { "settings synchronization failed" }
+                } finally { cleanup() }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { cleanup() }
+        Unit
+    }
+
+    /** Serialized storage work; completion is delivered only to the live generation. */
+    internal fun update(
+        work: () -> Boolean,
+        cleanup: () -> Unit = {},
+        onComplete: (Boolean) -> Unit = {}
+    ) = synchronized(queueLock) {
+        if (closed) { cleanup(); return@synchronized }
+        try {
+            worker.value.execute {
+                val saved = try {
+                    !closed && work()
+                } catch (error: Exception) {
+                    ModuleLog.w(error) { "settings update failed" }
+                    false
+                } finally { cleanup() }
+                executor.execute { if (!closed) onComplete(saved) }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            cleanup()
+        }
+        Unit
+    }
+
+    internal fun saveState(): Bundle? = sync.saveState()
 
     internal fun restoreState(saved: Bundle?) = sync.restoreState(saved)
 
-    private fun localSettings(): PaymentSettings {
+    private fun localSettings(): PaymentSettings = snapshot
+
+    private fun readPreferences(): PaymentSettings {
         // Read one coherent preference snapshot instead of locking each field separately.
         val values = pref.all
         return PaymentSettings(
@@ -56,29 +114,42 @@ class ConfigStore(
         )
     }
 
-    private fun settings(): PaymentSettings = sync.current(::localSettings)
+    private fun settings(): PaymentSettings = sync.current()
 
     private fun writeSettings(change: SharedPreferences.Editor.() -> Unit): Boolean {
-        val base = settings()
-        val editor = pref.edit()
-        if (app == PaymentApp.QQ && base.revision > localSettings().revision) {
-            // This process received a newer snapshot while its framework cache stayed stale.
-            editor.putString(PrefKeys.prefKeyPwd, base.encryptedPassword)
+        val updated = synchronized(writeLock) {
+            if (closed) return false
+            val base = settings()
+            val editor = pref.edit()
+                .putString(PrefKeys.prefKeyPwd, base.encryptedPassword)
                 .putString(KEY_PASSWORD_OWNER, base.owner)
                 .putBoolean(PrefKeys.prefKeyOn, base.enabled)
                 .putInt(KEY_PASSWORD_VERSION, base.passwordVersion)
                 .putInt(KEY_BIOMETRIC_TYPE, base.biometricType)
+            change(editor)
+            editor.putLong(KEY_SETTINGS_REVISION, base.revision + 1L)
+            if (!editor.commit()) return false
+            readPreferences().also { snapshot = it }
         }
-        change(editor)
-        editor.putLong(KEY_SETTINGS_REVISION, base.revision + 1L)
-        if (!editor.commit()) return false
-        sync.afterWrite(localSettings())
+        if (!closed) sync.afterWrite(updated)
         return true
     }
 
     fun isBioPayEnabled(): Boolean = activeConfig() != null
 
-    internal fun activeConfig(): PaymentConfig? = settings().activeFor(app)
+    internal fun activeConfig(): PaymentConfig? {
+        if (closed) return null
+        val current = settings()
+        val cached = active
+        if (cached?.settings === current) return cached.config
+        val config = current.activeFor(app)?.takeUnless {
+            PasswordVersionPolicy.requiresReentry(it.encryptedPassword, it.passwordVersion)
+        }
+        active = ActiveSnapshot(current, config)
+        return config
+    }
+
+    internal fun revision(): Long = settings().revision
 
     internal fun isCurrent(config: PaymentConfig): Boolean = activeConfig() == config
 
@@ -89,18 +160,20 @@ class ConfigStore(
         return pref.getBoolean(KEY_LOG_CAPTURE, false)
     }
 
-    fun setLogCaptureEnabled(enabled: Boolean): Boolean =
-        pref.edit().putBoolean(KEY_LOG_CAPTURE, enabled).commit()
+    internal fun setLogCaptureEnabled(enabled: Boolean): Boolean = synchronized(writeLock) {
+        !closed && pref.edit().putBoolean(KEY_LOG_CAPTURE, enabled).commit()
+    }
 
     fun getEncodedPassword(): String? = encodedPassword(settings())
 
     private fun encodedPassword(current: PaymentSettings): String? = current.encodedPasswordFor(app)
 
     fun needsPasswordReentry(): Boolean = settings().let {
-        !it.encryptedPassword.isNullOrEmpty() && encodedPassword(it) == null
+        !it.encryptedPassword.isNullOrEmpty() && (encodedPassword(it) == null ||
+            PasswordVersionPolicy.requiresReentry(it.encryptedPassword, it.passwordVersion))
     }
 
-    fun savePassword(password: String, cipher: javax.crypto.Cipher, passwordVersion: Int, biometricType: Int = getBiometricType()): Result<Unit> {
+    internal fun savePassword(password: CharArray, cipher: javax.crypto.Cipher, passwordVersion: Int, biometricType: Int = getBiometricType()): Result<Unit> {
         return try {
             val encrypted = PasswordCipher.encrypt(password, cipher)
             if (!writeSettings {
@@ -112,12 +185,12 @@ class ConfigStore(
             }) error("payment settings could not be saved")
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(LOG_TAG, "savePassword failed", e)
+            ModuleLog.e(e) { "savePassword failed" }
             Result.failure(e)
         }
     }
 
-    fun clearPassword(): Boolean {
+    internal fun clearPassword(): Boolean {
         return writeSettings {
             putBoolean(PrefKeys.prefKeyOn, false)
             putString(PrefKeys.prefKeyPwd, "")
@@ -127,7 +200,7 @@ class ConfigStore(
         }
     }
 
-    fun setBiometricMode(type: Int): Boolean {
+    internal fun setBiometricMode(type: Int): Boolean {
         require(type in BiometricType.DISABLED..BiometricType.FACE)
         return writeSettings {
             putBoolean(PrefKeys.prefKeyOn, type != BiometricType.DISABLED)

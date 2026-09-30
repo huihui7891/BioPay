@@ -5,21 +5,21 @@
  */
 package io.github.kiriashi.biopay.runtime
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Dialog
-import android.util.Log
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.libxposed.api.XposedInterface
 
 /** Includes payment dialogs whose window is separate from the Activity decor. */
 object DialogShowHook {
     const val HOOK_ID = "bp_dialog_show"
 
-    fun register(xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun register(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             val method = Dialog::class.java.getDeclaredMethod("show")
             xposed.hook(method).setId(HOOK_ID).intercept(makeInterceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "dialog show hook failed", e)
+            ModuleLog.w(e) { "dialog show hook failed" }
+            null
         }
     }
 
@@ -30,7 +30,7 @@ object DialogShowHook {
                 if (!state.isClosed) state.visualMonitor?.watchDialog(dialog)
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "dialog inspection setup failed", e)
+            ModuleLog.w(e) { "dialog inspection setup failed" }
         }
         result
     }

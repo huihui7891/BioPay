@@ -5,11 +5,10 @@
  */
 package io.github.kiriashi.biopay.runtime
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.content.Context
-import android.util.Log
 import android.view.View
 import io.github.kiriashi.biopay.apps.PaymentApp
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.kiriashi.biopay.payment.PasswordAutoInput
 import io.github.libxposed.api.XposedInterface
 import java.lang.reflect.Method
@@ -17,7 +16,7 @@ import java.lang.reflect.Modifier
 
 /** Silences feedback initiated synchronously by automatic Alipay/Taobao keys. */
 internal object InputFeedbackHook {
-    @Suppress("DEPRECATION") // The legacy vibrator is still needed on Android 9–11.
+    @Suppress("DEPRECATION") // The legacy vibrator is still needed on Android 10–11.
     fun targets(state: AppRuntime): List<Method> {
         if (state.adapter.app !in setOf(PaymentApp.ALIPAY, PaymentApp.TAOBAO)) return emptyList()
         val methods = View::class.java.declaredMethods.filter {
@@ -35,7 +34,7 @@ internal object InputFeedbackHook {
                     }
                     type = type.superclass
                 }
-            }.onFailure { Log.w(LOG_TAG, "input feedback target lookup failed: $service", it) }
+            }.onFailure { ModuleLog.w(it) { "input feedback target lookup failed: $service" } }
         }
         return methods.distinct()
     }
@@ -52,8 +51,8 @@ internal object InputFeedbackHook {
         }
     }
 
-    fun register(xposed: XposedInterface, method: Method) {
+    fun register(xposed: XposedInterface, method: Method): XposedInterface.HookHandle? =
         runCatching { xposed.hook(method).setId(id(method)).intercept(interceptor()) }
-            .onFailure { Log.w(LOG_TAG, "input feedback hook failed: ${id(method)}", it) }
-    }
+            .onFailure { ModuleLog.w(it) { "input feedback hook failed: ${id(method)}" } }
+            .getOrNull()
 }

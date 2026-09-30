@@ -5,18 +5,16 @@
  */
 package io.github.kiriashi.biopay.payment
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.apps.VisualPaymentAdapter
 
 import android.app.Activity
 import android.app.Dialog
 import android.os.SystemClock
-import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
-import io.github.kiriashi.biopay.core.log.LOG_TAG
-import io.github.kiriashi.biopay.core.log.LogCapture
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
@@ -94,7 +92,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             lastPaymentActivity = WeakReference(activity)
             if (!alreadyScanning) startWindowScan()
             if (adapter.app == PaymentApp.ALIPAY || adapter.app == PaymentApp.TAOBAO) {
-                Log.i(LOG_TAG, "${adapter.app.displayName}: watching foreground Activity ${activity.javaClass.name}")
+                ModuleLog.d { "${adapter.app.displayName}: watching foreground Activity ${activity.javaClass.name}" }
             }
         } else if (!paymentHost && lastPaymentActivity?.get() != null) {
             schedulePaymentExitCheck()
@@ -254,18 +252,15 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             ) return
             val now = SystemClock.uptimeMillis()
             if (!screenState.shouldAttempt(screen.keyboard, now)) return
-            Log.i(LOG_TAG, "${adapter.app.displayName}: payment password screen recognized; requesting biometric authentication")
-            LogCapture.log("${adapter.app.displayName}: payment screen recognized; requesting biometric auth")
+            ModuleLog.d { "${adapter.app.displayName}: payment password screen recognized; requesting biometric authentication" }
             if (state.flow.setupBiometricAuth(screen.keyboard, password, activity)) {
                 screenState.markPrompted(screen.keyboard)
-                Log.i(LOG_TAG, "${adapter.app.displayName}: biometric authentication request started")
-                LogCapture.log("${adapter.app.displayName}: biometric request started")
+                ModuleLog.d { "${adapter.app.displayName}: biometric authentication request started" }
             } else {
-                Log.w(LOG_TAG, "${adapter.app.displayName}: biometric authentication request was not started")
-                LogCapture.log("${adapter.app.displayName}: biometric request not started")
+                ModuleLog.d { "${adapter.app.displayName}: biometric authentication request was not started" }
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "${adapter.app.displayName} payment view inspection failed", e)
+            ModuleLog.w(e) { "${adapter.app.displayName} payment view inspection failed" }
         }
     }
 

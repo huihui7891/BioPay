@@ -5,10 +5,9 @@
  */
 package io.github.kiriashi.biopay.runtime
 
-import android.util.Log
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.view.View
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 import io.github.libxposed.api.XposedInterface
 import java.lang.reflect.Method
 
@@ -27,11 +26,12 @@ internal object PaymentWindowHook {
         .maxByOrNull { it.parameterTypes.size }
         ?: error("WindowManagerGlobal.addView was not found")
 
-    fun register(xposed: XposedInterface, state: AppRuntime) {
-        try {
+    fun register(xposed: XposedInterface, state: AppRuntime): XposedInterface.HookHandle? {
+        return try {
             xposed.hook(addViewMethod()).setId(HOOK_ID).intercept(interceptor(state))
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "payment window hook registration failed", e)
+            ModuleLog.w(e) { "payment window hook registration failed" }
+            null
         }
     }
 
@@ -43,11 +43,11 @@ internal object PaymentWindowHook {
                 root.post {
                     if (state.isClosed || !root.isAttachedToWindow) return@post
                     runCatching { state.visualMonitor?.watchWindow(root) }
-                        .onFailure { Log.w(LOG_TAG, "payment window inspection failed", it) }
+                        .onFailure { ModuleLog.w(it) { "payment window inspection failed" } }
                 }
             }
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "payment window inspection setup failed", e)
+            ModuleLog.w(e) { "payment window inspection setup failed" }
         }
         result
     }

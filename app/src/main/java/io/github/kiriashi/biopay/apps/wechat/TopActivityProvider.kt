@@ -18,9 +18,8 @@
  */
 package io.github.kiriashi.biopay.apps.wechat
 
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import android.app.Activity
-import android.util.Log
-import io.github.kiriashi.biopay.core.log.LOG_TAG
 
 object TopActivityProvider {
 
@@ -34,7 +33,7 @@ object TopActivityProvider {
         getTopActivityMethod = try {
             findMethod(classLoader)
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "resolve getTopActivity failed", e)
+            ModuleLog.w(e) { "resolve getTopActivity failed" }
             null
         }
     }
@@ -55,7 +54,7 @@ object TopActivityProvider {
             getTopActivityMethod = runCatching { findMethod(fallbackLoader) }.getOrNull()
         }
         if (getTopActivityMethod != null) return
-        Log.w(LOG_TAG, "getTopActivity unavailable after hook reload")
+        ModuleLog.w { "getTopActivity unavailable after hook reload" }
     }
 
     fun reset() {
@@ -68,7 +67,7 @@ object TopActivityProvider {
         return try {
             method.invoke(null) as? Activity
         } catch (e: Throwable) {
-            Log.w(LOG_TAG, "getTopActivity failed", e)
+            ModuleLog.w(e) { "getTopActivity failed" }
             null
         }
     }

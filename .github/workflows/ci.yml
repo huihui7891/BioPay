@@ -59,15 +59,16 @@ jobs:
           retention-days: 7
           path: app/build/outputs/apk/debug/app-debug.apk
 
-  # Rebuilds the exact release pipeline (R8, ProGuard rules, shrinking) on
-  # manual runs using an ephemeral throwaway key. Catches issues like
-  # entry-point obfuscation that debug builds can never reveal.
+  # Validate the optimized release with an ephemeral signing key.
   release-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v5
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -93,7 +94,7 @@ jobs:
           BIOPAY_RELEASE_STORE_PASSWORD: ci-release
           BIOPAY_RELEASE_KEY_ALIAS: biopay-ci
           BIOPAY_RELEASE_KEY_PASSWORD: ci-release
-        run: ./gradlew assembleRelease
+        run: ./gradlew lintRelease assembleRelease --warning-mode fail
 
       - name: Verify Xposed entry survived shrinking
         run: |
@@ -112,3 +113,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: app/build/outputs/mapping/release/mapping.txt
+
+      - name: Upload release Lint reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-release-lint
+          if-no-files-found: ignore
+          retention-days: 7
+          path: app/build/reports/lint-results-release.*
