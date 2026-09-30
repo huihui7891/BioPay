@@ -93,7 +93,7 @@ class PaymentFlow(private val state: AppRuntime) {
 
     fun reset() {
         PasswordAutoInput.cancelPendingRunnables()
-        KeyboardCloak.reset()
+        InputMask.reset()
         synchronized(attachLock) {
             attachListener?.let { l ->
                 val view = attachedViewRef?.get()
@@ -142,7 +142,7 @@ class PaymentFlow(private val state: AppRuntime) {
             view.removeOnAttachStateChangeListener(this)
             if (state.session.getCurrentKeyboardView() !== detachedView) return
 
-            KeyboardCloak.uncloakKeyboardViews(detachedView)
+            InputMask.reset()
             PasswordAutoInput.cancelPendingRunnables()
 
             if (state.session.isAuthenticationInProgress()) {

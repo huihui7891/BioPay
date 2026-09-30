@@ -149,6 +149,9 @@ object HookManager {
                 InputFeedbackHook.register(xposed, method)
             }
         }
+        bind(InputTouchHook.HOOK_ID, interceptor = InputTouchHook.interceptor(state)) {
+            InputTouchHook.register(xposed, state)
+        }
 
         // Includes retired bootstrap hooks and duplicate IDs from older generations.
         var stale = 0

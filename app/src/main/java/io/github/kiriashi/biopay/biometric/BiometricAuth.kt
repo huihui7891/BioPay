@@ -19,7 +19,7 @@
 package io.github.kiriashi.biopay.biometric
 
 import io.github.kiriashi.biopay.core.log.ModuleLog
-import io.github.kiriashi.biopay.payment.KeyboardCloak
+import io.github.kiriashi.biopay.payment.InputMask
 import io.github.kiriashi.biopay.payment.PasswordAutoInput
 
 import android.hardware.biometrics.BiometricPrompt
@@ -137,14 +137,8 @@ object BiometricAuth {
                 val currentView = state.session.getCurrentKeyboardView() ?: keyboardView
                 currentView.visibility = View.VISIBLE
                 PasswordAutoInput.cancelPendingRunnables()
-                KeyboardCloak.concealActivityWindow(state)
-                if (PasswordAutoInput.autoInputPassword(currentView, password, state, sessionId, config)) {
-                    // Resolve visible digit keys before concealing them. QQ writes to its
-                    // password field synchronously, so only queued keypad input needs cloaking.
-                    if (PasswordAutoInput.isInProgress(sessionId)) {
-                        KeyboardCloak.cloakKeyboardViews(currentView)
-                    }
-                } else {
+                InputMask.show(state)
+                if (!PasswordAutoInput.autoInputPassword(currentView, password, state, sessionId, config)) {
                     state.session.restoreKeyboard(sessionId)
                 }
             } catch (e: Throwable) {

@@ -86,8 +86,7 @@ object PasswordAutoInput {
                     input.text.isNullOrEmpty()
                 ) {
                     input.setText(String(passwordChars))
-                    KeyboardCloak.uncloakKeyboardViews(keyboardView)
-                    KeyboardCloak.restoreConcealedInputViews(animated = true)
+                    InputMask.finish()
                     state.session.setInputEditText(null)
                     return true
                 }
@@ -111,8 +110,7 @@ object PasswordAutoInput {
                             confirm.rootView === keyboardView.rootView && confirm.performClick()
                     }
                     if (submitted) {
-                        KeyboardCloak.uncloakKeyboardViews(keyboardView)
-                        KeyboardCloak.restoreConcealedInputViews(animated = true)
+                        InputMask.finish()
                         state.session.setInputEditText(null)
                         state.session.setConfirmButton(null)
                     }
@@ -141,7 +139,7 @@ object PasswordAutoInput {
         val run = activeRun ?: return
         activeRun = null
         tasks.cancel(run)
-        KeyboardCloak.reset()
+        InputMask.reset()
     }
 
     private class InputRun(val keyboard: WeakReference<ViewGroup>, val keys: List<WeakReference<View>>,
@@ -164,8 +162,7 @@ object PasswordAutoInput {
             try {
                 if (index == keys.size) {
                     activeRun = null
-                    KeyboardCloak.uncloakKeyboardViews(view)
-                    KeyboardCloak.restoreConcealedInputViews(animated = true)
+                    InputMask.finish()
                     state.session.setInputEditText(null)
                     return
                 }

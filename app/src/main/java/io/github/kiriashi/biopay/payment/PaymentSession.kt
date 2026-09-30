@@ -134,7 +134,7 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         tasks.onMain {
             if (!isCurrentSession(id) || isAuthenticationInProgress()) return@onMain
             val keyboard = getCurrentKeyboardView() ?: return@onMain
-            KeyboardCloak.reset()
+            InputMask.reset()
             keyboard.visibility = View.VISIBLE
             val input = getInputEditText()?.takeIf { it.isAttachedToWindow } ?: return@onMain
             input.requestFocus()
