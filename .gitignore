@@ -62,3 +62,6 @@ Thumbs.db
 
 # Proguard
 proguard/
+
+# Local experiments and diagnostic tools
+tools/
