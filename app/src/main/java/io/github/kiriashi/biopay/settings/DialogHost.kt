@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -20,6 +20,10 @@ package io.github.kiriashi.biopay.settings
 
 import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
+import android.view.WindowManager
 import io.github.kiriashi.biopay.core.util.isValidActivity
 import android.view.View
 import android.os.CancellationSignal
@@ -48,13 +52,32 @@ class DialogHost(context: Context) {
     }
     var onDismiss: (() -> Unit)? = null
     private val ctx get() = contextRef.get()
-    fun show(content: View) {
-        val c = ctx ?: return
-        if (!c.isValidActivity()) return
-        dialog = AlertDialog.Builder(c).setView(content).setCancelable(false).create()
+    fun show(content: View): Boolean {
+        val c = ctx ?: return false
+        if (!c.isValidActivity()) return false
+        // Use the platform floating alert window so Android can pan it naturally to keep
+        // the focused password field visible. The explicit platform theme avoids inheriting
+        // payment-app alert styling behind the rounded module content.
+        dialog = AlertDialog.Builder(c, android.R.style.Theme_Material_Light_Dialog_Alert)
+            .setView(content)
+            .setCancelable(false)
+            .create()
+            .apply {
+                setCanceledOnTouchOutside(false)
+                window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+            }
         dialog?.setOnDismissListener { cancelAuthentication(); dialog = null; onDismiss?.invoke() }
-        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog?.show()
+        dialog?.window?.let { window ->
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.decorView.background = ColorDrawable(Color.TRANSPARENT)
+            window.setDimAmount(0.32f)
+            window.setGravity(Gravity.CENTER)
+            val metrics = c.resources.displayMetrics
+            val maxWidth = metrics.widthPixels - (48f * metrics.density).toInt()
+            window.setLayout(maxWidth.coerceAtLeast(1), WindowManager.LayoutParams.WRAP_CONTENT)
+        }
+        return dialog?.isShowing == true
     }
     fun dismiss() {
         cancelAuthentication()

@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -20,59 +20,34 @@
 package io.github.kiriashi.biopay.core.log
 
 /**
- * Bounded double-buffer for log lines. Pure JVM: no Android dependencies.
- *
- * Callers must synchronize externally; generation counting lets the writer
- * skip clearing a buffer that received new lines while it was flushed.
+ * Rolling log history. Callers must synchronize access externally.
  */
 class LogRingBuffer(
     private val maxBufferSize: Int = 64 * 1024,
     private val flushThreshold: Int = maxBufferSize * 3 / 4
 ) {
 
-    private val bufferA = StringBuilder()
-    private val bufferB = StringBuilder()
-    private var activeBuffer = bufferA
-    var dirtyGeneration = 0
-        private set
+    private val buffer = StringBuilder()
 
     fun append(line: String) {
-        if (activeBuffer.length > maxBufferSize) {
-            val keepFrom = activeBuffer.indexOf("\n", flushThreshold)
+        if (buffer.length > maxBufferSize) {
+            val keepFrom = buffer.indexOf("\n", flushThreshold)
             if (keepFrom > 0) {
-                activeBuffer.delete(0, keepFrom + 1)
+                buffer.delete(0, keepFrom + 1)
             } else {
-                activeBuffer.clear()
+                buffer.clear()
             }
         }
-        activeBuffer.append(line).append("\n")
-        dirtyGeneration++
+        buffer.append(line).append("\n")
     }
 
     fun appendRaw(text: String) {
-        activeBuffer.append(text)
-        dirtyGeneration++
+        buffer.append(text)
     }
 
-    /** Swaps the buffers and returns the drained content with its generation. */
-    fun swap(): Pair<String, Int> {
-        if (activeBuffer.isEmpty()) return "" to dirtyGeneration
-        activeBuffer = if (activeBuffer === bufferA) bufferB else bufferA
-        val flushing = if (activeBuffer === bufferA) bufferB else bufferA
-        return flushing.toString() to dirtyGeneration
-    }
-
-    /** Clears the drained buffer only if nothing was appended while flushing. */
-    fun clearFlushed(generation: Int) {
-        if (dirtyGeneration != generation) return
-        if (activeBuffer === bufferA) bufferB.clear() else bufferA.clear()
-    }
-
-    fun snapshot(): String = bufferA.toString() + bufferB.toString()
+    fun snapshot(): String = buffer.toString()
 
     fun clear() {
-        bufferA.clear()
-        bufferB.clear()
-        activeBuffer = bufferA
+        buffer.clear()
     }
 }

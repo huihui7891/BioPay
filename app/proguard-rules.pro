@@ -17,13 +17,11 @@
 }
 
 # ---- BiometricPrompt callbacks (passed to system API) ----
--keep class io.github.kiriashi.biopay.payment.BiometricGate$BiometricAuthCallback { *; }
--keep class io.github.kiriashi.biopay.payment.BiometricPaymentController$KeyboardAttachListener { *; }
-
-# ---- settings.DialogHost is internal-only; safe to shrink/obfuscate ----
+-keep class io.github.kiriashi.biopay.biometric.BiometricAuth$BiometricAuthCallback { *; }
+-keep class io.github.kiriashi.biopay.payment.PaymentFlow$KeyboardAttachListener { *; }
 
 # ---- Reflection targets (WeChat internal classes) ----
-# NOTE: 微信类名通过 StringEncoder 混淆后动态 loadClass，R8 无法静态分析引用关系
+# WeChat target names are decoded at runtime, so R8 cannot see these reflective references.
 -dontwarn com.tencent.mm.**
 -dontwarn com.tencent.kinda.**
 -dontwarn com.tenpay.**
@@ -46,7 +44,7 @@
 -allowaccessmodification
 -optimizationpasses 5
 
-# ---- Remove all logging in release (anti-detection) ----
+# ---- Strip Android logging calls from release builds ----
 -assumenosideeffects class android.util.Log {
     public static int v(...);
     public static int d(...);

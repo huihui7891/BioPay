@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -20,27 +20,28 @@
 package io.github.kiriashi.biopay.core.log
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LogRingBufferTest {
 
     @Test
-    fun swapDrainsAppendedContent() {
+    fun snapshotPreservesAppendedContent() {
         val ring = LogRingBuffer()
         ring.append("a")
         ring.append("b")
 
-        val (content, _) = ring.swap()
+        val content = ring.snapshot()
 
         assertEquals("a\nb\n", content)
+        ring.append("c")
+        assertEquals("a\nb\nc\n", ring.snapshot())
     }
 
     @Test
-    fun swapOnEmptyBufferReturnsEmpty() {
+    fun emptyBufferHasEmptySnapshot() {
         val ring = LogRingBuffer()
 
-        val (content, _) = ring.swap()
+        val content = ring.snapshot()
 
         assertEquals("", content)
     }
@@ -66,33 +67,9 @@ class LogRingBufferTest {
     }
 
     @Test
-    fun clearFlushedSkipsBufferThatReceivedNewLines() {
-        val ring = LogRingBuffer()
-        ring.append("old")
-        val (_, generation) = ring.swap()
-        ring.append("new")
-
-        ring.clearFlushed(generation)
-
-        assertTrue(ring.snapshot().contains("new\n"))
-    }
-
-    @Test
-    fun clearFlushedDrainsQuietBuffer() {
-        val ring = LogRingBuffer()
-        ring.append("old")
-        val (_, generation) = ring.swap()
-
-        ring.clearFlushed(generation)
-
-        assertEquals("", ring.snapshot())
-    }
-
-    @Test
     fun clearResetsToEmpty() {
         val ring = LogRingBuffer()
         ring.append("a")
-        ring.swap()
 
         ring.clear()
 

@@ -1,0 +1,315 @@
+/*
+ * BioPay - biometric payment assistance for supported payment apps.
+ * Copyright (C) 2026 kiriashi
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+package io.github.kiriashi.biopay.payment
+
+import io.github.kiriashi.biopay.apps.PaymentApp
+import io.github.kiriashi.biopay.apps.VisualPaymentAdapter
+
+import android.app.Activity
+import android.app.Dialog
+import android.os.SystemClock
+import android.util.Log
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import io.github.kiriashi.biopay.core.log.LOG_TAG
+import io.github.kiriashi.biopay.core.log.LogCapture
+import io.github.kiriashi.biopay.core.util.MainTasks
+import io.github.kiriashi.biopay.core.util.findActivity
+import io.github.kiriashi.biopay.runtime.AppRuntime
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
+
+class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: VisualPaymentAdapter) {
+    private val observers = WeakHashMap<ViewGroup, LayoutObserver>()
+    private val screenState = PaymentScreenState<ViewGroup>()
+    @Volatile private var closed = false
+    private var screenSeenInScan = false
+    private val paymentExitCheck = object : Runnable {
+        override fun run() {
+            if (closed) return
+            val sessionId = state.session.currentSessionId()
+            if (state.session.isAuthenticationInProgress() ||
+                PasswordAutoInput.isInProgress(sessionId)
+            ) {
+                tasks.post(this, PAYMENT_EXIT_GRACE_MS)
+                return
+            }
+            if (!hasVisiblePaymentScreen()) clearPaymentScreen()
+        }
+    }
+    private val tasks = MainTasks()
+    private var paymentActivity: WeakReference<Activity>? = null
+    private var lastPaymentActivity: WeakReference<Activity>? = null
+    private var scanUntil = 0L
+    private val windowScan = object : Runnable {
+        override fun run() {
+            if (closed) return
+            val activity = paymentActivity?.get() ?: return
+            if (activity.isFinishing || activity.isDestroyed || !adapter.supports(activity)) return
+            if (!paymentEnabled()) {
+                clearPaymentScreen()
+                return
+            }
+            // Catch windows created during the first few layout frames. Later
+            // windows arrive through Dialog.show or WindowManager.addView.
+            val windows = PaymentWindowRoots.attached().ifEmpty {
+                listOfNotNull(activity.window?.decorView as? ViewGroup)
+            }
+            screenSeenInScan = false
+            windows.forEach { root ->
+                val owner = root.context.findActivity()
+                if (owner != null && owner !== activity) return@forEach
+                if (owner == null && root.context.packageName != state.app.packageName) return@forEach
+                watch(root)
+                if (!state.session.isAuthenticationInProgress() &&
+                    !PasswordAutoInput.isInProgress(state.session.currentSessionId())
+                ) observers[root]?.inspectNow()
+            }
+            val sessionId = state.session.currentSessionId()
+            val busy = state.session.isAuthenticationInProgress() ||
+                PasswordAutoInput.isInProgress(sessionId)
+            if (screenState.screenAbsentTooLong(
+                    screenSeenInScan, busy, state.session.isInPaymentMode(), SystemClock.uptimeMillis()
+                )) {
+                clearPaymentScreen()
+            }
+            if (SystemClock.uptimeMillis() < scanUntil) tasks.post(this, 350L)
+        }
+    }
+
+    fun watchActivity(activity: Activity) {
+        if (closed) return
+        val root = activity.window?.decorView as? ViewGroup ?: return
+        val paymentHost = adapter.supports(activity)
+        if (paymentHost && paymentEnabled()) {
+            watch(root)
+            tasks.cancel(paymentExitCheck)
+            val alreadyScanning = paymentActivity?.get() === activity &&
+                SystemClock.uptimeMillis() < scanUntil
+            paymentActivity = WeakReference(activity)
+            lastPaymentActivity = WeakReference(activity)
+            if (!alreadyScanning) startWindowScan()
+            if (adapter.app == PaymentApp.ALIPAY || adapter.app == PaymentApp.TAOBAO) {
+                Log.i(LOG_TAG, "${adapter.app.displayName}: watching foreground Activity ${activity.javaClass.name}")
+            }
+        } else if (!paymentHost && lastPaymentActivity?.get() != null) {
+            schedulePaymentExitCheck()
+        }
+    }
+
+    fun watchDialog(dialog: Dialog) {
+        if (closed) return
+        val root = dialog.window?.decorView as? ViewGroup ?: return
+        val activity = root.context.findActivity() ?: paymentActivity?.get() ?: return
+        if (adapter.supports(activity) && paymentEnabled()) watchWindow(root)
+    }
+
+    /** Called after a process window is attached; the callback is posted to its view. */
+    fun watchWindow(root: ViewGroup) {
+        if (closed || !root.isAttachedToWindow || !paymentEnabled()) return
+        val activity = root.context.findActivity() ?: paymentActivity?.get() ?: return
+        if (activity.application !== state.app || !adapter.supports(activity) ||
+            activity.isFinishing || activity.isDestroyed) return
+        watch(root)
+        observers[root]?.inspectNow()
+    }
+
+    /** Reattach listeners to already open Activity and Dialog windows after hot reload. */
+    fun restoreVisibleWindows() {
+        tasks.onMain {
+            if (closed || !paymentEnabled()) return@onMain
+            for (root in PaymentWindowRoots.attached()) {
+                val activity = root.context.findActivity()
+                if (activity?.application === state.app) {
+                    if (adapter.supports(activity)) {
+                        watch(root)
+                        paymentActivity = WeakReference(activity)
+                        lastPaymentActivity = WeakReference(activity)
+                    }
+                }
+            }
+            if (paymentActivity?.get() != null && paymentEnabled()) startWindowScan()
+        }
+    }
+
+    fun stopActivity(activity: Activity, destroyed: Boolean = false) {
+        if (closed) return
+        if (paymentActivity?.get() === activity) {
+            paymentActivity = null
+            tasks.cancel(windowScan)
+            scanUntil = 0L
+            schedulePaymentExitCheck()
+        }
+        val root = activity.window?.decorView as? ViewGroup ?: return
+        val authenticationActive = state.session.isAuthenticationInProgress()
+        unwatch(root, endSession = destroyed || !authenticationActive)
+        if (destroyed || !authenticationActive) state.session.endSessionForActivity(activity)
+    }
+
+    fun close() {
+        if (closed) return
+        closed = true
+        tasks.close()
+        tasks.onMain {
+            scanUntil = 0L
+            paymentActivity = null
+            lastPaymentActivity = null
+            for ((root, observer) in observers) observer.removeFrom(root)
+            observers.clear()
+            screenState.clear()
+        }
+    }
+
+    private fun watch(root: ViewGroup) {
+        if (closed) return
+        if (observers.containsKey(root)) return
+        val observer = LayoutObserver(root)
+        observers[root] = observer
+        root.viewTreeObserver.addOnGlobalLayoutListener(observer)
+        root.addOnAttachStateChangeListener(observer)
+        observer.onGlobalLayout()
+    }
+
+    private fun unwatch(root: ViewGroup, endSession: Boolean = true) {
+        observers.remove(root)?.removeFrom(root)
+        if (screenState.keyboard()?.rootView === root && screenState.prompted) schedulePaymentExitCheck()
+        if (endSession && !screenState.prompted && screenState.keyboard()?.rootView === root) {
+            screenState.clear()
+            state.session.endSession(state.session.currentSessionId())
+        }
+    }
+
+    private fun clearPaymentScreen() {
+        screenState.clear()
+        lastPaymentActivity = null
+        state.session.endSession(state.session.currentSessionId())
+    }
+
+    private fun schedulePaymentExitCheck() {
+        tasks.cancel(paymentExitCheck)
+        if (screenState.prompted || state.session.isInPaymentMode()) {
+            tasks.post(paymentExitCheck, PAYMENT_EXIT_GRACE_MS)
+        }
+    }
+
+    private fun startWindowScan() {
+        scanUntil = SystemClock.uptimeMillis() + INITIAL_SCAN_MS
+        tasks.post(windowScan)
+    }
+
+    private fun hasVisiblePaymentScreen(): Boolean = PaymentWindowRoots.attached().ifEmpty {
+        listOfNotNull(lastPaymentActivity?.get()?.window?.decorView as? ViewGroup)
+    }.any { root ->
+        if (root.context.findActivity() == null && root.context.packageName != state.app.packageName) {
+            return@any false
+        }
+        val activity = root.context.findActivity() ?: lastPaymentActivity?.get() ?: return@any false
+        adapter.supports(activity) && adapter.observe(root, activity) != null
+    }
+
+    private fun paymentEnabled(): Boolean = state.prefs.isBioPayEnabled()
+
+    private fun inspect(root: ViewGroup) {
+        if (closed) return
+        if (PasswordAutoInput.isInProgress(state.session.currentSessionId())) return
+        try {
+            val activity = root.context.findActivity() ?: paymentActivity?.get() ?: return
+            if (activity.isFinishing || activity.isDestroyed) return
+            val paymentHost = adapter.supports(activity)
+            if (!paymentHost) {
+                if (activity.window?.decorView === root) state.installEntry(activity)
+                return
+            }
+            if (state.session.isAuthenticationInProgress()) return
+            val password = state.prefs.activePassword() ?: return
+            val screen = adapter.observe(root, activity)
+            if (screen == null) {
+                if (screenState.keyboard()?.rootView === root && screenState.prompted) schedulePaymentExitCheck()
+                return
+            }
+            tasks.cancel(paymentExitCheck)
+            screenSeenInScan = true
+            state.session.setInputEditText(screen.passwordInput)
+            state.session.setConfirmButton(screen.confirmButton)
+            if (screenState.prompted) {
+                val current = state.session.getCurrentKeyboardView()
+                if (!state.session.isAuthenticationInProgress() &&
+                    !PasswordAutoInput.isInProgress(state.session.currentSessionId()) &&
+                    (!state.session.isInPaymentMode() || current?.isAttachedToWindow != true ||
+                        current.isShown != true)
+                ) {
+                    if (state.flow.setupBiometricAuth(
+                            screen.keyboard, password, activity, startImmediately = false
+                        )) screenState.rememberKeyboard(screen.keyboard)
+                }
+                return
+            }
+            if (screenState.keyboard() === screen.keyboard) return
+            if (state.session.isAuthenticationInProgress() ||
+                PasswordAutoInput.isInProgress(state.session.currentSessionId())
+            ) return
+            val now = SystemClock.uptimeMillis()
+            if (!screenState.shouldAttempt(screen.keyboard, now)) return
+            Log.i(LOG_TAG, "${adapter.app.displayName}: payment password screen recognized; requesting biometric authentication")
+            LogCapture.log("${adapter.app.displayName}: payment screen recognized; requesting biometric auth")
+            if (state.flow.setupBiometricAuth(screen.keyboard, password, activity)) {
+                screenState.markPrompted(screen.keyboard)
+                Log.i(LOG_TAG, "${adapter.app.displayName}: biometric authentication request started")
+                LogCapture.log("${adapter.app.displayName}: biometric request started")
+            } else {
+                Log.w(LOG_TAG, "${adapter.app.displayName}: biometric authentication request was not started")
+                LogCapture.log("${adapter.app.displayName}: biometric request not started")
+            }
+        } catch (e: Throwable) {
+            Log.w(LOG_TAG, "${adapter.app.displayName} payment view inspection failed", e)
+        }
+    }
+
+    private inner class LayoutObserver(root: ViewGroup) :
+        ViewTreeObserver.OnGlobalLayoutListener, View.OnAttachStateChangeListener, Runnable {
+        private val rootRef = WeakReference(root)
+        private var lastInspection = 0L
+        private var pending = false
+
+        override fun onGlobalLayout() {
+            if (closed || pending) return
+            pending = true
+            // Coalesce rapid layouts while still inspecting the final layout.
+            tasks.post(this, lastInspection + 250L - SystemClock.uptimeMillis())
+        }
+
+        override fun run() = inspectNow()
+
+        fun inspectNow() {
+            tasks.cancel(this)
+            pending = false
+            val root = rootRef.get() ?: return
+            if (closed || observers[root] !== this || !root.isAttachedToWindow) return
+            lastInspection = SystemClock.uptimeMillis()
+            inspect(root)
+        }
+
+        override fun onViewAttachedToWindow(view: View) = Unit
+
+        override fun onViewDetachedFromWindow(view: View) {
+            (view as? ViewGroup)?.let(::unwatch)
+        }
+
+        fun removeFrom(root: ViewGroup) {
+            tasks.cancel(this)
+            pending = false
+            root.removeOnAttachStateChangeListener(this)
+            if (root.viewTreeObserver.isAlive) root.viewTreeObserver.removeOnGlobalLayoutListener(this)
+        }
+    }
+
+    private companion object {
+        const val PAYMENT_EXIT_GRACE_MS = 2_500L
+        const val INITIAL_SCAN_MS = 5_000L
+    }
+
+}

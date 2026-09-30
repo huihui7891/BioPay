@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -22,9 +22,9 @@ package io.github.kiriashi.biopay.settings
 import io.github.kiriashi.biopay.BuildConfig
 import io.github.kiriashi.biopay.core.util.dp
 import io.github.kiriashi.biopay.core.util.isValidActivity
-import io.github.kiriashi.biopay.hook.FieldStore
-import io.github.kiriashi.biopay.lifecycle.AppState
-import io.github.kiriashi.biopay.payment.BiometricType
+import io.github.kiriashi.biopay.runtime.FieldStore
+import io.github.kiriashi.biopay.runtime.AppRuntime
+import io.github.kiriashi.biopay.biometric.BiometricType
 import io.github.kiriashi.biopay.settings.ui.M3Field
 import io.github.kiriashi.biopay.settings.ui.M3Switch
 import io.github.kiriashi.biopay.settings.ui.Theme
@@ -51,16 +51,16 @@ import android.widget.TextView
 
 object SettingsDialog {
 
-    fun show(context: Context, state: AppState) {
-        if (!context.isValidActivity()) return
+    fun show(context: Context, state: AppRuntime): Boolean {
+        if (state.isClosed || !context.isValidActivity()) return false
         val dialogHost = DialogHost(context)
         val layout = createDialogContent(context, dialogHost, state)
         dialogHost.onDismiss = { state.fields.removeField(context, FieldStore.SETTINGS_DIALOG) }
-        dialogHost.show(layout)
+        return dialogHost.show(layout)
     }
 
-    private fun createDialogContent(context: Context, dialogHost: DialogHost, state: AppState): LinearLayout {
-        val t = Theme.colors(context)
+    private fun createDialogContent(context: Context, dialogHost: DialogHost, state: AppRuntime): LinearLayout {
+        val t = Theme.colors(context, state.adapter.app)
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(context.dp(24), context.dp(24), context.dp(24), context.dp(24))
@@ -83,7 +83,7 @@ object SettingsDialog {
         }
 
         root.addView(TextView(context).apply {
-            text = "模块设置"
+            text = "${state.adapter.app.displayName} · BioPay"
             textSize = 24f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setTextColor(t.onSurface)
@@ -114,15 +114,16 @@ object SettingsDialog {
             filters = arrayOf(InputFilter.LengthFilter(6))
             imeOptions = EditorInfo.IME_ACTION_DONE
         }
-        SettingsController.loadSavedPassword(pwdInput, state)
+        SettingsActions.loadSavedPassword(pwdInput, state)
         setPwdEnabled(pwdInput, fpOn || faceOn)
 
         val clearBtn = makeClearBtn(context, t)
         clearBtn.setOnLongClickListener {
             it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-            SettingsController.authenticateWithBiometric(context, dialogHost, state, "清除密码，生物支付已关闭") {
-                SettingsController.handleClearPassword(state)
-                true
+            SettingsActions.authenticateWithBiometric(context, dialogHost, state, "清除密码，生物支付已关闭") {
+                SettingsActions.handleClearPassword(state).also { cleared ->
+                    if (!cleared) SettingsActions.showToast(context, "清除失败，请重试")
+                }
             }
             true
         }
@@ -150,7 +151,9 @@ object SettingsDialog {
             root.addView(logCard)
 
             toggleLog.onCheckedChangeListener = { enabled ->
-                SettingsController.showToast(context, SettingsController.setLogCaptureEnabled(context, state, enabled))
+                val message = SettingsActions.setLogCaptureEnabled(context, state, enabled)
+                if (message == null) toggleLog.setCheckedSilently(!enabled)
+                SettingsActions.showToast(context, message ?: "保存失败，请重试")
             }
         }
 
@@ -233,7 +236,7 @@ object SettingsDialog {
         }
     }
 
-    private fun makeButtonRow(context: Context, dialogHost: DialogHost, pwdInput: M3Field, state: AppState, t: ThemeColors, getSelectedType: () -> Int): LinearLayout {
+    private fun makeButtonRow(context: Context, dialogHost: DialogHost, pwdInput: M3Field, state: AppRuntime, t: ThemeColors, getSelectedType: () -> Int): LinearLayout {
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -245,10 +248,10 @@ object SettingsDialog {
             })
             addView(View(context), LinearLayout.LayoutParams(0, 0, 1f))
             addView(makeBtn(context, "取消", t.surfaceContainerHighest, t.onSurface, t.disabledRipple, context.dp(8)) {
-                SettingsController.dismissDialog(context, dialogHost, state)
+                SettingsActions.dismissDialog(context, dialogHost, state)
             })
             addView(makeBtn(context, "保存", t.primary, t.onPrimary, t.ripple, 0) {
-                SettingsController.handleSave(context, dialogHost, pwdInput, state, getSelectedType())
+                SettingsActions.handleSave(context, dialogHost, pwdInput, state, getSelectedType())
             })
         }
     }

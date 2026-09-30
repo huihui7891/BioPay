@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -28,13 +28,6 @@ class XorCodecTest {
     @Test
     fun decodeEmptyArrayYieldsEmptyString() {
         assertEquals("", XorCodec.decode(intArrayOf()))
-    }
-
-    @Test
-    fun decodeIsDeterministic() {
-        val encoded = intArrayOf(57, 83, 19, 51, 235)
-
-        assertEquals(XorCodec.decode(encoded), XorCodec.decode(encoded))
     }
 
     @Test

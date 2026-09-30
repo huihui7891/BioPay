@@ -1,0 +1,54 @@
+/*
+ * BioPay - biometric payment assistance for supported payment apps.
+ * Copyright (C) 2026 kiriashi
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+package io.github.kiriashi.biopay.runtime
+
+import android.util.Log
+import android.view.View
+import android.view.ViewGroup
+import io.github.kiriashi.biopay.core.log.LOG_TAG
+import io.github.libxposed.api.XposedInterface
+import java.lang.reflect.Method
+
+/** Observes payment popups created outside Dialog.show. */
+internal object PaymentWindowHook {
+    const val HOOK_ID = "bp_payment_window_add_view"
+
+    fun addViewMethod(): Method = Class.forName("android.view.WindowManagerGlobal")
+        .declaredMethods
+        .filter { method ->
+            val args = method.parameterTypes
+            method.name == "addView" && args.size >= 2 &&
+                View::class.java.isAssignableFrom(args[0]) &&
+                ViewGroup.LayoutParams::class.java.isAssignableFrom(args[1])
+        }
+        .maxByOrNull { it.parameterTypes.size }
+        ?: error("WindowManagerGlobal.addView was not found")
+
+    fun register(xposed: XposedInterface, state: AppRuntime) {
+        try {
+            xposed.hook(addViewMethod()).setId(HOOK_ID).intercept(interceptor(state))
+        } catch (e: Throwable) {
+            Log.w(LOG_TAG, "payment window hook registration failed", e)
+        }
+    }
+
+    fun interceptor(state: AppRuntime): XposedInterface.Hooker = XposedInterface.Hooker { chain ->
+        val result = chain.proceed()
+        try {
+            (chain.args.firstOrNull() as? ViewGroup)?.let { root ->
+                if (state.isClosed) return@let
+                root.post {
+                    if (state.isClosed || !root.isAttachedToWindow) return@post
+                    runCatching { state.visualMonitor?.watchWindow(root) }
+                        .onFailure { Log.w(LOG_TAG, "payment window inspection failed", it) }
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(LOG_TAG, "payment window inspection setup failed", e)
+        }
+        result
+    }
+}

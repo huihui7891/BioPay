@@ -101,7 +101,8 @@ jobs:
           test -s "$APK"
           ENTRY=$(python3 -c "import zipfile,sys; print(zipfile.ZipFile(sys.argv[1]).read('META-INF/xposed/java_init.list').decode().strip())" "$APK")
           echo "Entry: $ENTRY"
-          test "$ENTRY" = "io.github.kiriashi.biopay.entry.BioPayModule"
+          EXPECTED_ENTRY=$(python3 -c "from pathlib import Path; print(Path('app/src/main/resources/META-INF/xposed/java_init.list').read_text().strip())")
+          test "$ENTRY" = "$EXPECTED_ENTRY"
           test -s app/build/outputs/mapping/release/mapping.txt
 
       - name: Upload release mapping

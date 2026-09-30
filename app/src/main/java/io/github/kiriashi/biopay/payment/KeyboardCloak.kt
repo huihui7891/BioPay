@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -18,19 +18,30 @@
  */
 package io.github.kiriashi.biopay.payment
 
-import io.github.kiriashi.biopay.lifecycle.AppState
+import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.kiriashi.biopay.core.util.findActivity
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import java.util.WeakHashMap
 
 object KeyboardCloak {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val cloakedLock = Any()
     private var cloakedStates: WeakHashMap<View, Float>? = null
     private val concealedWindowLock = Any()
     private val concealedWindowStates = WeakHashMap<View, Float>()
     fun reset() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(::resetOnMain)
+            return
+        }
+        resetOnMain()
+    }
+
+    private fun resetOnMain() {
         restoreCloakedViews()
         restoreConcealedInputViews()
     }
@@ -55,12 +66,13 @@ object KeyboardCloak {
             view.alpha = alpha
         }
     }
-    fun concealActivityWindow(state: AppState) {
+    fun concealActivityWindow(state: AppRuntime) {
         val editText = state.session.getInputEditText() ?: return
         val currentKeyboard = state.session.getCurrentKeyboardView()
         synchronized(concealedWindowLock) {
             val activity = currentKeyboard?.context?.findActivity()
                 ?: editText.context.findActivity()
+                ?: state.session.getHostActivity()
             activity?.window?.decorView?.let { decorView ->
                 if (!concealedWindowStates.containsKey(decorView)) {
                     concealedWindowStates[decorView] = decorView.alpha

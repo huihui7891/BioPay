@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -19,14 +19,14 @@
 
 package io.github.kiriashi.biopay.core.codec
 
-/** Single-byte XOR codec used to keep hook targets out of plain strings. */
+/** Decodes XOR-obfuscated constants; this does not protect them as secrets. */
 object XorCodec {
 
-    private val K = intArrayOf(0x5A, 0x3C, 0x7E, 0x1D, 0x9F, 0x4B, 0xA2, 0x68)
+    private val xorKey = intArrayOf(0x5A, 0x3C, 0x7E, 0x1D, 0x9F, 0x4B, 0xA2, 0x68)
 
     fun decode(encoded: IntArray): String {
         val decoded = ByteArray(encoded.size)
-        for (i in encoded.indices) decoded[i] = (encoded[i] xor K[i % K.size]).toByte()
+        for (i in encoded.indices) decoded[i] = (encoded[i] xor xorKey[i % xorKey.size]).toByte()
         return String(decoded, Charsets.UTF_8)
     }
 }

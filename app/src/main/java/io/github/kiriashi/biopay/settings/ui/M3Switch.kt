@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -42,6 +42,13 @@ class M3Switch(context: Context, private val t: ThemeColors) : View(context) {
             }
         }
     var onCheckedChangeListener: ((Boolean) -> Unit)? = null
+
+    fun setCheckedSilently(value: Boolean) {
+        val listener = onCheckedChangeListener
+        onCheckedChangeListener = null
+        isChecked = value
+        onCheckedChangeListener = listener
+    }
 
     private val d = context.resources.displayMetrics.density
     private val trackW = 52f * d

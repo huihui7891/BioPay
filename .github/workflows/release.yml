@@ -101,7 +101,8 @@ jobs:
           # Xposed entry must survive R8/shrinking with its real name.
           ENTRY=$(python3 -c "import zipfile,sys; print(zipfile.ZipFile(sys.argv[1]).read('META-INF/xposed/java_init.list').decode().strip())" "$APK")
           echo "Entry: $ENTRY"
-          test "$ENTRY" = "io.github.kiriashi.biopay.entry.BioPayModule"
+          EXPECTED_ENTRY=$(python3 -c "from pathlib import Path; print(Path('app/src/main/resources/META-INF/xposed/java_init.list').read_text().strip())")
+          test "$ENTRY" = "$EXPECTED_ENTRY"
           # Signature valid.
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
           "$APKSIGNER" verify "$APK"

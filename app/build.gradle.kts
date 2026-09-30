@@ -14,10 +14,7 @@ kotlin {
     }
 }
 
-// Mainstream signing scheme: private key material comes from environment
-// variables (CI secrets) or an untracked local.properties file, never from
-// the repository. When neither is present, the release build gracefully
-// falls back to an unsigned APK instead of failing (CorePatch pattern).
+// Read signing credentials from CI or an untracked local.properties file.
 val signProps = Properties()
 rootProject.file("local.properties").takeIf { it.exists() }?.let { FileInputStream(it).use { fis -> signProps.load(fis) } }
 
@@ -33,8 +30,8 @@ android {
         applicationId = "io.github.kiriashi.biopay"
         minSdk = 28
         targetSdk = 35
-        versionCode = 260928
-        versionName = "1.2.3"
+        versionCode = 260930
+        versionName = "2.0.0"
     }
 
     signingConfigs {
@@ -55,8 +52,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             isDebuggable = false
-            // Graceful degradation: without key material the build yields an
-            // unsigned APK instead of failing (same pattern as CorePatch).
+            // Keep local release builds usable when no keystore is configured.
             signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile?.exists() == true }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

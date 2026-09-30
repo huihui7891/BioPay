@@ -1,5 +1,5 @@
 /*
- * BioPay - biometric payment assistance for WeChat Tenpay keyboard.
+ * BioPay - biometric payment assistance for supported payment apps.
  *
  * Copyright (C) 2026 kiriashi
  *
@@ -21,6 +21,7 @@ package io.github.kiriashi.biopay.settings.ui
 
 import android.content.Context
 import android.content.res.Configuration
+import io.github.kiriashi.biopay.apps.PaymentApp
 
 data class ThemeColors(
     val primary: Int,
@@ -40,6 +41,24 @@ data class ThemeColors(
 )
 
 object Theme {
+
+    private data class AppAccent(
+        val light: Int,
+        val dark: Int,
+        val darkOnPrimary: Int
+    )
+
+    private fun accentFor(app: PaymentApp?): AppAccent = when (app) {
+        PaymentApp.ALIPAY -> AppAccent(0xFF1677D2.toInt(), 0xFF80B8FF.toInt(), 0xFF00325F.toInt())
+        PaymentApp.TAOBAO -> AppAccent(0xFFC74600.toInt(), 0xFFFFB59A.toInt(), 0xFF4C1A00.toInt())
+        PaymentApp.QQ -> AppAccent(0xFF45484D.toInt(), 0xFFC5C8CE.toInt(), 0xFF292B30.toInt())
+        PaymentApp.UNIONPAY -> AppAccent(0xFFE60012.toInt(), 0xFFFF8A95.toInt(), 0xFF5A0005.toInt())
+        PaymentApp.WECHAT, null -> AppAccent(
+            light = 0xFF1A6B52.toInt(),
+            dark = 0xFF7DD4B5.toInt(),
+            darkOnPrimary = 0xFF003828.toInt()
+        )
+    }
 
     val Light = ThemeColors(
         primary = 0xFF1A6B52.toInt(),
@@ -79,5 +98,16 @@ object Theme {
         return (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     }
 
-    fun colors(context: Context) = if (isDark(context)) Dark else Light
+    fun colors(context: Context, app: PaymentApp? = null): ThemeColors {
+        val darkMode = isDark(context)
+        val base = if (darkMode) Dark else Light
+        val accent = accentFor(app)
+        val primary = if (darkMode) accent.dark else accent.light
+        return base.copy(
+            primary = primary,
+            onPrimary = if (darkMode) accent.darkOnPrimary else 0xFFFFFFFF.toInt(),
+            switchOn = primary,
+            disabledRipple = (primary and 0x00FFFFFF) or (0x50 shl 24)
+        )
+    }
 }
