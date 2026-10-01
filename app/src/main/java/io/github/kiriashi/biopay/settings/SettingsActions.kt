@@ -55,7 +55,7 @@ object SettingsActions {
         }
         val chars = password.toCharArray()
         authenticateWithBiometric(context, host, state, biometricType = type, cleanup = { chars.fill('\u0000') }) {
-            val cipher = PasswordCipher.createEncryptionCipher(state.adapter.app.packageName)
+            val cipher = PasswordCipher.createEncryptionCipher(state.app, state.adapter.app.packageName)
             state.prefs.savePassword(chars, cipher, PasswordVersionPolicy.current, type).isSuccess
         }
     }

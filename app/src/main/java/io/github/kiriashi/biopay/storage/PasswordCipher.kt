@@ -20,11 +20,19 @@
 package io.github.kiriashi.biopay.storage
 
 import io.github.kiriashi.biopay.core.log.ModuleLog
+import android.content.Context
+import android.os.Build
+import android.os.SystemClock
+import android.security.KeyStoreException
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import java.io.File
+import java.io.RandomAccessFile
+import java.nio.channels.OverlappingFileLockException
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -46,7 +54,6 @@ object PasswordCipher {
     private val keyAlias get() = PrefKeys.keystoreAlias + KEY_VERSION
     private val keyStoreLock = Any()
     @Volatile private var keyStore: KeyStore? = null
-    @Volatile private var secretKey: SecretKey? = null
 
     data class DecryptOperation(
         val cipher: Cipher,
@@ -61,26 +68,23 @@ object PasswordCipher {
         }
     }
 
-    private fun getSecretKey(): SecretKey {
-        secretKey?.let { return it }
+    private fun getSecretKey(createIfMissing: Boolean = false): SecretKey {
         synchronized(keyStoreLock) {
-            secretKey?.let { return it }
-            try {
-                if (!getKeyStore().containsAlias(keyAlias)) generateKey()
-                return (getKeyStore().getKey(keyAlias, null) as SecretKey).also { secretKey = it }
-            } catch (e: Throwable) {
-                if (e is KeyPermanentlyInvalidatedException || e.cause is KeyPermanentlyInvalidatedException) {
-                    ModuleLog.w { "encryption key invalidated; clearing key" }
-                    getKeyStore().deleteEntry(keyAlias)
-                    secretKey = null
-                    throw IllegalStateException("encryption key invalidated", e)
-                }
-                throw e
+            val store = getKeyStore()
+            if (!store.containsAlias(keyAlias)) {
+                if (createIfMissing) return generateKey()
+                throw UnrecoverableKeyException("payment encryption key is missing")
             }
+            val key = store.getKey(keyAlias, null) as? SecretKey
+                ?: throw UnavailableKeyException()
+            if (key.algorithm != KeyProperties.KEY_ALGORITHM_AES) throw UnavailableKeyException()
+            return key
         }
     }
 
-    private fun generateKey() {
+    private class UnavailableKeyException : UnrecoverableKeyException("payment encryption key is unusable")
+
+    private fun generateKey(): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
         val builder = KeyGenParameterSpec.Builder(
             keyAlias,
@@ -90,7 +94,7 @@ object PasswordCipher {
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(KEY_SIZE)
         generator.init(builder.build())
-        generator.generateKey()
+        return generator.generateKey()
     }
 
     fun isAppBoundCiphertext(encoded: String): Boolean = encoded.startsWith(BOUND_PREFIX)
@@ -98,12 +102,36 @@ object PasswordCipher {
     private fun associatedData(packageName: String): ByteArray =
         "BioPay:payment-password:v1:$packageName".toByteArray(Charsets.UTF_8)
 
-    fun createEncryptionCipher(packageName: String): Cipher {
+    /** Recovery is allowed only after the user authenticates to save a newly entered password. */
+    fun createEncryptionCipher(context: Context, packageName: String): Cipher {
+        require(context.packageName == packageName) { "payment password owner mismatch" }
+        return synchronized(keyStoreLock) {
+            withKeyLock(context) {
+                try {
+                    encryptionCipher(packageName)
+                } catch (error: Exception) {
+                    if (!isUnusableKey(error)) throw error
+                    ModuleLog.w(error) { "payment encryption key unusable; recreating for password save" }
+                    try {
+                        keyStore = null
+                        getKeyStore().deleteEntry(keyAlias)
+                        encryptionCipher(packageName)
+                    } catch (retry: Exception) {
+                        if (retry !== error) retry.addSuppressed(error)
+                        ModuleLog.d(retry) { "payment encryption key recovery failed" }
+                        throw retry
+                    }
+                }
+            }
+        }
+    }
+
+    private fun encryptionCipher(packageName: String): Cipher {
         var phase = "provider"
         try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             phase = "key"
-            val key = getSecretKey()
+            val key = getSecretKey(createIfMissing = true)
             phase = "cipher initialization"
             cipher.init(Cipher.ENCRYPT_MODE, key)
             phase = "app binding"
@@ -112,6 +140,38 @@ object PasswordCipher {
         } catch (error: Exception) {
             ModuleLog.d(error) { "password encryption initialization failed: phase=$phase" }
             throw error
+        }
+    }
+
+    private fun isUnusableKey(error: Throwable): Boolean {
+        var current: Throwable? = error
+        repeat(16) {
+            val cause = current ?: return false
+            if (cause is KeyPermanentlyInvalidatedException || cause is UnavailableKeyException) return true
+            if (Build.VERSION.SDK_INT >= 33 && cause is KeyStoreException &&
+                cause.numericErrorCode == KeyStoreException.ERROR_KEY_CORRUPTED) return true
+            if (cause.javaClass.name == "android.security.KeyStoreException") {
+                // Public numeric codes combine KeyMint failures. Android's -33
+                // carries this specific message on both old and current providers.
+                if (cause.message?.startsWith("Invalid key blob", ignoreCase = true) == true) return true
+            }
+            current = cause.cause
+        }
+        return false
+    }
+
+    private fun <T> withKeyLock(context: Context, action: () -> T): T {
+        RandomAccessFile(File(context.filesDir, "biopay_password_key.lock"), "rw").use { file ->
+            val deadline = SystemClock.elapsedRealtime() + 5_000L
+            var acquired: java.nio.channels.FileLock? = null
+            while (acquired == null) {
+                acquired = try { file.channel.tryLock() } catch (_: OverlappingFileLockException) { null }
+                if (acquired == null) {
+                    check(SystemClock.elapsedRealtime() < deadline) { "Payment encryption key lock timed out" }
+                    Thread.sleep(10)
+                }
+            }
+            acquired.use { return action() }
         }
     }
 
