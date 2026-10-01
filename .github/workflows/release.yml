@@ -21,9 +21,6 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    outputs:
-      tag: ${{ steps.check_version.outputs.tag }}
-      version_code: ${{ steps.check_version.outputs.version_code }}
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -39,9 +36,8 @@ jobs:
           test -n "$NAME" || { echo "error: versionName not found"; exit 1; }
           echo "Version: $NAME"
           if ! echo "$NAME" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Version '$NAME' is not a stable x.y.z release, skipping."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "error: Version '$NAME' must be a stable x.y.z release."
+            exit 1
           fi
           CODE=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts | head -n 1)
           test -n "$CODE" || { echo "error: versionCode not found"; exit 1; }
@@ -51,7 +47,7 @@ jobs:
           echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
           gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp > "$RUNNER_TEMP/releases.json"
           if jq -e --arg tag "$TAG" --arg apk "BioPay-$TAG.apk" 'any(.[][]; .tag_name == $tag and .draft == false and .prerelease == false and any(.assets[]; .name == $apk and .size > 0))' "$RUNNER_TEMP/releases.json" > /dev/null; then
-            echo "Release $TAG already published; checking module repository sync next."
+            echo "Release $TAG already published; building Debug only."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -68,11 +64,9 @@ jobs:
           cat changelog.txt
 
       - name: Validate Gradle wrapper
-        if: steps.check_version.outputs.changed == 'true'
         uses: gradle/actions/wrapper-validation@v5
 
       - name: Set up Java
-        if: steps.check_version.outputs.changed == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -80,8 +74,18 @@ jobs:
           cache: gradle
 
       - name: Make Gradle executable
-        if: steps.check_version.outputs.changed == 'true'
         run: chmod +x gradlew
+
+      - name: Build debug APK
+        run: ./gradlew lintDebug assembleDebug --warning-mode fail
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: Debug
+          if-no-files-found: error
+          retention-days: 30
+          path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Restore signing keystore
         if: steps.check_version.outputs.changed == 'true'
@@ -120,6 +124,15 @@ jobs:
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
           "$APKSIGNER" verify "$APK"
 
+      - name: Upload Release APK
+        if: steps.check_version.outputs.changed == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Release
+          if-no-files-found: error
+          retention-days: 30
+          path: app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
+
       - name: Upload release mapping (private)
         if: steps.check_version.outputs.changed == 'true'
         uses: actions/upload-artifact@v6
@@ -138,32 +151,3 @@ jobs:
           body_path: changelog.txt
           files: |
             app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
-
-  sync_module_repository:
-    name: Sync LSPosed module repository
-    needs: release
-    if: needs.release.outputs.tag != ''
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    concurrency:
-      group: biopay-module-repository
-      cancel-in-progress: false
-    steps:
-      - name: Check out listing source
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      # Set MODULE_REPO_TOKEN to a token with Contents write access to
-      # Xposed-Modules-Repo/io.github.kiriashi.biopay. GITHUB_TOKEN cannot write there.
-      - name: Sync README, SUMMARY and signed release APK
-        env:
-          GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
-          SOURCE_TOKEN: ${{ github.token }}
-          SOURCE_REPOSITORY: ${{ github.repository }}
-          MODULE_REPOSITORY: Xposed-Modules-Repo/io.github.kiriashi.biopay
-          RELEASE_TAG: ${{ needs.release.outputs.tag }}
-          VERSION_CODE: ${{ needs.release.outputs.version_code }}
-        run: python3 .github/scripts/sync_module_repository.py

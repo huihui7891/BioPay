@@ -86,7 +86,7 @@ BioPay 通过 Android 的 **BiometricPrompt** 调用指纹或面容。部分设�
 
 **问题反馈（Issue）**：
 如果遇到 Bug 或有功能建议，欢迎提交 Issue。提交前请按以下步骤操作：
-1. 卸载正式版，从 [CI Artifacts](https://github.com/kiriashi/BioPay/actions/workflows/ci.yml) 下载最新的 `biopay-debug-apk`，安装并进行一遍问题复现。
+1. 卸载正式版，从 [Release 工作流的 Artifacts](https://github.com/kiriashi/BioPay/actions/workflows/release.yml) 下载最新的 `Debug`，安装并进行一遍问题复现。
 2. 在对应应用中打开「模块设置 → 异常诊断 → 导出」生成诊断日志，日志不会涉及任何个人敏感信息。
 3. 提交 Issue 时，请附上复现步骤、诊断日志，以及系统版本、支付应用版本与 BioPay 版本。
 

@@ -1,0 +1,67 @@
+name: Sync module repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '已发布的源码 Release 标签，例如 v2.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: biopay-module-repository
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out sync script
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'error: Invalid stable release tag'; exit 1; }
+
+      - name: Check out release listing
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+          path: listing
+          persist-credentials: false
+
+      - name: Read and validate release version
+        working-directory: listing
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          source = Path('app/build.gradle.kts').read_text()
+          name = re.search(r'versionName\s*=\s*"([^"]+)"', source)
+          code = re.search(r'versionCode\s*=\s*(\d+)', source)
+          if not name or not code or 'v' + name[1] != os.environ['RELEASE_TAG']:
+              raise ValueError('Release tag does not match its source version')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'VERSION_CODE={code[1]}\n')
+          PY
+
+      - name: Sync README, SUMMARY and signed release APK
+        working-directory: listing
+        env:
+          GH_TOKEN: ${{ secrets.MODULE_REPO_TOKEN }}
+          SOURCE_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          MODULE_REPOSITORY: Xposed-Modules-Repo/io.github.kiriashi.biopay
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python3 ../.github/scripts/sync_module_repository.py
