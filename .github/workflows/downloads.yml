@@ -1,0 +1,35 @@
+name: Download badge
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 0 * * *'
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: biopay-download-badge
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'kiriashi/BioPay' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out badge updater
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Update combined downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          MODULE_REPOSITORY: Xposed-Modules-Repo/io.github.kiriashi.biopay
+        run: python3 .github/scripts/update_download_badge.py --output "$RUNNER_TEMP/downloads.json" --publish
