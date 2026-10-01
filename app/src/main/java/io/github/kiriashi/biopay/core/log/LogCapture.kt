@@ -8,116 +8,102 @@ package io.github.kiriashi.biopay.core.log
 import android.app.Application
 import android.content.Context
 import android.os.Handler
-import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
 import io.github.kiriashi.biopay.BuildConfig
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
-/** Each process and module generation owns its capture session and writer. */
+/** Debug history stays in memory; only explicit exports write to Downloads. */
 object LogCapture {
     private val lock = Any()
+    private val history = LogRingBuffer()
     private var session: Session? = null
     private val formatter by lazy {
         ThreadLocal.withInitial { SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US) }
     }
-    private const val FLUSH_INTERVAL = 5000L
-    private const val MAX_REPORTS = 10
-    private const val MAX_DISK_BYTES = 2 * 1024 * 1024L
+    private val startTime = timestamp()
 
-    private class Session(context: Context) {
-        val ring = LogRingBuffer()
-        val thread = HandlerThread("BioPayLog").apply { start() }
-        val writer = Handler(thread.looper)
-        val file = File(context.filesDir, "BioPay/biopay_log_${Process.myPid()}_${UUID.randomUUID()}.txt")
-        var dirty = true
-        var writeFailed = false
-        val flush = object : Runnable {
-            override fun run() {
-                val content = synchronized(lock) {
-                    if (session !== this@Session) return
-                    if (dirty) { dirty = false; ring.snapshot() } else null
-                }
-                if (content != null) save(this@Session, content)
-                synchronized(lock) {
-                    if (session === this@Session) writer.postDelayed(this, FLUSH_INTERVAL)
-                }
-            }
-        }
+    private class Session(val context: Context) {
+        val worker = lazy { Executors.newSingleThreadExecutor { Thread(it, "BioPayDiagnostics") } }
+        var exporting = false
+        var bridge: LogExport? = null
     }
 
     fun start(context: Context) {
         if (!BuildConfig.DEBUG) return
         synchronized(lock) {
             if (session != null) return
-            val next = Session(context)
-            next.ring.appendRaw(LogFormat.header(
-                device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
-                androidRelease = android.os.Build.VERSION.RELEASE,
-                apiLevel = android.os.Build.VERSION.SDK_INT,
-                startTime = timestamp()
-            ))
-            next.ring.append("Module: ${BuildConfig.VERSION_NAME}; process: ${Application.getProcessName()}; pid: ${Process.myPid()}")
+            val next = Session(context.applicationContext)
             session = next
-            next.writer.postDelayed(next.flush, FLUSH_INTERVAL)
+            next.bridge = LogExport(next.context, ::enqueue)
         }
     }
 
-    fun stop(@Suppress("UNUSED_PARAMETER") context: Context, onSaved: (String?) -> Unit) {
-        if (!BuildConfig.DEBUG) { onSaved(null); return }
+    fun close() {
+        if (!BuildConfig.DEBUG) return
+        val old = synchronized(lock) { session.also { session = null } } ?: return
+        old.bridge?.close()
+        if (old.worker.isInitialized()) old.worker.value.shutdown()
+    }
+
+    fun export(context: Context, onSaved: (List<String>) -> Unit) {
+        if (!BuildConfig.DEBUG) { onSaved(emptyList()); return }
+        start(context)
+        val bridge = synchronized(lock) { session?.bridge }
+        if (bridge != null) bridge.export(onSaved) else exportLocal(onSaved = { onSaved(listOfNotNull(it)) })
+    }
+
+    internal fun exportLocal(onSaved: (String?) -> Unit) {
         val main = Handler(Looper.getMainLooper())
-        synchronized(lock) {
-            val current = session
-            if (current == null) { main.post { onSaved(null) }; return }
-            session = null
-            current.writer.removeCallbacks(current.flush)
-            current.ring.appendRaw(LogFormat.footer(timestamp()))
-            val content = current.ring.snapshot()
-            if (!current.writer.post {
-                val saved = save(current, content)
-                main.post { onSaved(if (saved) current.file.absolutePath else null) }
-            }) main.post { onSaved(null) }
-            current.thread.quitSafely()
+        val current = synchronized(lock) {
+            session?.takeUnless { it.exporting }?.also { it.exporting = true }
         }
+        if (current == null) { main.post { onSaved(null) }; return }
+        val content = buildString {
+            append(LogFormat.header(
+                "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                android.os.Build.VERSION.RELEASE, android.os.Build.VERSION.SDK_INT, startTime
+            ))
+            appendLine("Module: ${BuildConfig.VERSION_NAME}; process: ${Application.getProcessName()}; pid: ${Process.myPid()}")
+            append(synchronized(lock) { history.snapshot() })
+            append(LogFormat.footer(timestamp()))
+        }
+        enqueue {
+            var location: String? = null
+            try {
+                val report = LogReport(current.context)
+                report.write(content)
+                location = report.location
+                runCatching { report.prune() }.onFailure { ModuleLog.w(it) { "log report cleanup failed" } }
+            } catch (error: Exception) {
+                ModuleLog.w(error) { "diagnostic export failed" }
+            } finally {
+                synchronized(lock) { current.exporting = false }
+                main.post { onSaved(location) }
+            }
+        }.also { queued ->
+            if (!queued) {
+                synchronized(lock) { current.exporting = false }
+                main.post { onSaved(null) }
+            }
+        }
+    }
+
+    private fun enqueue(work: () -> Unit): Boolean = synchronized(lock) {
+        val current = session ?: return false
+        try {
+            current.worker.value.execute(work)
+            true
+        } catch (_: RejectedExecutionException) { false }
     }
 
     internal fun log(message: String) {
         if (!BuildConfig.DEBUG) return
-        synchronized(lock) {
-            val current = session ?: return
-            current.ring.append("${timestamp()} ${message.take(4096)}")
-            current.dirty = true
-        }
+        synchronized(lock) { history.append("${timestamp()} ${message.take(4096)}") }
     }
 
-    private fun timestamp(): String =
-        formatter.get()!!.format(System.currentTimeMillis())
-
-    private fun save(current: Session, content: String): Boolean = try {
-        current.file.parentFile?.mkdirs()
-        LogFileWriter.writeAtomically(current.file, content)
-        current.writeFailed = false
-        prune(current.file)
-        true
-    } catch (error: Exception) {
-        if (!current.writeFailed) {
-            current.writeFailed = true
-            ModuleLog.w(error) { "log capture write failed" }
-        }
-        false
-    }
-
-    private fun prune(active: File) {
-        val files = active.parentFile?.listFiles { file ->
-            file.isFile && file.name.startsWith("biopay_log_") && file.extension == "txt"
-        }?.sortedByDescending(File::lastModified) ?: return
-        var bytes = 0L
-        files.forEachIndexed { index, file ->
-            bytes += file.length()
-            if (file != active && (index >= MAX_REPORTS || bytes > MAX_DISK_BYTES)) file.delete()
-        }
-    }
+    private fun timestamp(): String = formatter.get()!!.format(System.currentTimeMillis())
 }

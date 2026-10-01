@@ -13,6 +13,7 @@ import io.github.kiriashi.biopay.biometric.BioPayPrompt
 import io.github.kiriashi.biopay.biometric.BiometricPromptPolicy
 import io.github.kiriashi.biopay.biometric.BiometricType
 import io.github.kiriashi.biopay.core.log.LogCapture
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.core.util.isValidActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.kiriashi.biopay.settings.ui.M3Field
@@ -115,6 +116,7 @@ object SettingsActions {
                 }
                 override fun onAuthenticationError(code: Int, message: CharSequence?) {
                     if (!dialogHost.finishAuthentication(attemptId)) return
+                    ModuleLog.d { "settings authentication ended: code=$code" }
                     cleanup()
                     if (!state.isClosed && dialogHost.isOpen && context.isValidActivity() && message != null) {
                         showToast(context, message.toString())
@@ -123,7 +125,8 @@ object SettingsActions {
             }
             BiometricPromptPolicy.configure(builder, biometricType).build()
                 .authenticate(signal, context.mainExecutor, callback)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            ModuleLog.d(error) { "settings authentication startup failed" }
             if (dialogHost.finishAuthentication(attemptId)) {
                 cleanup()
                 showToast(context, "无法启动身份验证，请重试")
@@ -135,29 +138,16 @@ object SettingsActions {
         if (msg.isNotEmpty()) Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     }
 
-    fun setLogCaptureEnabled(
-        context: Context,
-        host: DialogHost,
-        state: AppRuntime,
-        enabled: Boolean,
-        onComplete: (Boolean) -> Unit
+    fun exportDiagnostics(
+        context: Context, host: DialogHost, state: AppRuntime, onComplete: () -> Unit
     ) {
-        if (state.isClosed || !host.isOpen || !host.beginWork()) { onComplete(false); return }
-        state.prefs.update({ state.prefs.setLogCaptureEnabled(enabled) }) { saved ->
-            if (!host.finishWork() || !context.isValidActivity()) return@update
-            onComplete(saved)
-            if (!saved) { showToast(context, "保存失败，请重试"); return@update }
-            if (enabled) {
-                LogCapture.start(context)
-                showToast(context, "日志捕获已开启")
-            } else {
-                LogCapture.stop(context) { path ->
-                    if (!state.isClosed && host.isOpen && context.isValidActivity()) {
-                        showToast(context, if (path != null) "日志已保存到: $path" else "日志保存未完成")
-                    }
-                }
-                showToast(context, "日志捕获已关闭")
-            }
+        if (state.isClosed || !host.isOpen || !host.beginWork()) { onComplete(); return }
+        LogCapture.export(context) { paths ->
+            val active = host.finishWork()
+            onComplete()
+            if (!active || state.isClosed || !context.isValidActivity()) return@export
+            showToast(context, if (paths.isEmpty()) "日志导出失败，请重试"
+                else "已导出 ${paths.size} 份日志至下载/BioPay")
         }
     }
 }

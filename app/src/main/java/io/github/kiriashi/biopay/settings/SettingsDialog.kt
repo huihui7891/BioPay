@@ -98,9 +98,9 @@ object SettingsDialog {
         val toggleFp = M3Switch(context, t).apply { isChecked = fpOn }
         val toggleFace = M3Switch(context, t).apply { isChecked = faceOn }
 
-        bioCard.addView(makeSwitchRow(context, "启用指纹支付", "请确保设备已开启指纹解锁", toggleFp, t))
+        bioCard.addView(makeSettingRow(context, "启用指纹支付", "请确保设备已开启指纹解锁", toggleFp, t))
         bioCard.addView(makeDivider(context, t))
-        bioCard.addView(makeSwitchRow(context, "启用面容支付", "请确保设备已开启面容解锁", toggleFace, t))
+        bioCard.addView(makeSettingRow(context, "启用面容支付", "请确保设备已开启面容解锁", toggleFace, t))
         root.addView(bioCard)
 
         val pwdCard = makeCard(context, t)
@@ -139,16 +139,15 @@ object SettingsDialog {
         if (BuildConfig.DEBUG) {
             val logCard = makeCard(context, t)
             logCard.addView(makeSectionLabel(context, "调试", t))
-            val toggleLog = M3Switch(context, t).apply {
-                isChecked = state.prefs.isLogCaptureEnabled()
+            val export = makeClearBtn(context, t).apply {
+                text = "导出"
+                layoutParams = LinearLayout.LayoutParams(context.dp(64), context.dp(40))
             }
-            logCard.addView(makeSwitchRow(context, "日志捕获", "开启后自动记录运行日志", toggleLog, t))
+            logCard.addView(makeSettingRow(context, "异常诊断", "导出近期日志至下载/BioPay", export, t))
             root.addView(logCard)
-
-            toggleLog.onCheckedChangeListener = { enabled ->
-                SettingsActions.setLogCaptureEnabled(context, dialogHost, state, enabled) { saved ->
-                    if (!saved) toggleLog.setCheckedSilently(!enabled)
-                }
+            export.setOnClickListener {
+                setClearBtnEnabled(export, false, t)
+                SettingsActions.exportDiagnostics(context, dialogHost, state) { setClearBtnEnabled(export, true, t) }
             }
         }
 
@@ -197,7 +196,7 @@ object SettingsDialog {
         }
     }
 
-    private fun makeSwitchRow(context: Context, title: String, subtitle: String, switch: M3Switch, t: ThemeColors): LinearLayout {
+    private fun makeSettingRow(context: Context, title: String, subtitle: String, action: View, t: ThemeColors): LinearLayout {
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -220,7 +219,7 @@ object SettingsDialog {
                 setPadding(0, context.dp(2), 0, 0)
             })
             addView(textCol)
-            addView(switch)
+            addView(action)
         }
     }
 

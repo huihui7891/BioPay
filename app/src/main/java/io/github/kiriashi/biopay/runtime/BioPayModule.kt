@@ -97,7 +97,7 @@ class BioPayModule : XposedModule() {
                     app.unregisterActivityLifecycleCallbacks(callbacks)
                     ModuleLog.d { "hot reload: lifecycle callbacks detached in $reloadProcess" }
                 }
-                LogCapture.stop(app) { }
+                LogCapture.close()
             }
             lifecycleCallbacks = null
             runtime?.close()
@@ -176,7 +176,7 @@ class BioPayModule : XposedModule() {
                     state.visualMonitor?.restoreVisibleWindows()
                 }
             }
-            if (state.prefs.isLogCaptureEnabled()) LogCapture.start(app)
+            LogCapture.start(app)
             hooks.report(reloading = true)
         } else {
             // A process may reload between package loading and Application creation.
@@ -290,7 +290,7 @@ class BioPayModule : XposedModule() {
             }
             lifecycleCallbacks = AppLifecycleCallbacks(state)
                 .also(application::registerActivityLifecycleCallbacks)
-            if (state.prefs.isLogCaptureEnabled()) LogCapture.start(application)
+            LogCapture.start(application)
             initializedApplication = application
             targetPackageName = targetApp.packageName
             this.processName = this.processName ?: currentProcessName

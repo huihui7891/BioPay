@@ -26,8 +26,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
 
-private const val KEY_LOG_CAPTURE = "log_capture"
-
 class ConfigStore(
     context: Context,
     private val pref: SharedPreferences,
@@ -155,14 +153,6 @@ class ConfigStore(
 
     /** Returns a password only when it belongs to this app and payment is enabled. */
     fun activePassword(): String? = activeConfig()?.encryptedPassword
-
-    fun isLogCaptureEnabled(): Boolean {
-        return pref.getBoolean(KEY_LOG_CAPTURE, false)
-    }
-
-    internal fun setLogCaptureEnabled(enabled: Boolean): Boolean = synchronized(writeLock) {
-        !closed && pref.edit().putBoolean(KEY_LOG_CAPTURE, enabled).commit()
-    }
 
     fun getEncodedPassword(): String? = encodedPassword(settings())
 

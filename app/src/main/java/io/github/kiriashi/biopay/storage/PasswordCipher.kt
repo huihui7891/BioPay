@@ -98,9 +98,21 @@ object PasswordCipher {
     private fun associatedData(packageName: String): ByteArray =
         "BioPay:payment-password:v1:$packageName".toByteArray(Charsets.UTF_8)
 
-    fun createEncryptionCipher(packageName: String): Cipher = Cipher.getInstance(TRANSFORMATION).apply {
-        init(Cipher.ENCRYPT_MODE, getSecretKey())
-        updateAAD(associatedData(packageName))
+    fun createEncryptionCipher(packageName: String): Cipher {
+        var phase = "provider"
+        try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            phase = "key"
+            val key = getSecretKey()
+            phase = "cipher initialization"
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            phase = "app binding"
+            cipher.updateAAD(associatedData(packageName))
+            return cipher
+        } catch (error: Exception) {
+            ModuleLog.d(error) { "password encryption initialization failed: phase=$phase" }
+            throw error
+        }
     }
 
     fun encrypt(plainText: CharArray, cipher: Cipher): String {
