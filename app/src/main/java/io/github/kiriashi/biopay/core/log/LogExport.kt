@@ -5,6 +5,7 @@
  */
 package io.github.kiriashi.biopay.core.log
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -75,12 +76,18 @@ internal class LogExport(
                 if (Build.VERSION.SDK_INT >= 33) {
                     context.registerReceiver(receiver, IntentFilter(ACTION), Context.RECEIVER_NOT_EXPORTED)
                 } else {
-                    @Suppress("DEPRECATION")
-                    context.registerReceiver(receiver, IntentFilter(ACTION))
+                    registerLegacyReceiver()
                 }
                 registered = true
             }.onFailure { ModuleLog.w(it) { "diagnostic export receiver failed" } }
         }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun registerLegacyReceiver() {
+        // Android 10–12 lack RECEIVER_NOT_EXPORTED; signed requests authenticate the sender.
+        check(Build.VERSION.SDK_INT < 33)
+        context.registerReceiver(receiver, IntentFilter(ACTION))
     }
 
     fun export(onSaved: (List<String>) -> Unit) {
