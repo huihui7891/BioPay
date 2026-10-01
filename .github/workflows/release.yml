@@ -76,8 +76,29 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew lintDebug assembleDebug --warning-mode fail
+      - name: Restore signing keystore
+        env:
+          BIOPAY_RELEASE_KEYSTORE_BASE64: ${{ secrets.BIOPAY_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$BIOPAY_RELEASE_KEYSTORE_BASE64"
+          printf '%s' "$BIOPAY_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/biopay-release.keystore"
+
+      - name: Build signed debug APK
+        env:
+          BIOPAY_RELEASE_STORE_FILE: ${{ runner.temp }}/biopay-release.keystore
+          BIOPAY_RELEASE_STORE_PASSWORD: ${{ secrets.BIOPAY_RELEASE_STORE_PASSWORD }}
+          BIOPAY_RELEASE_KEY_ALIAS: ${{ secrets.BIOPAY_RELEASE_KEY_ALIAS }}
+          BIOPAY_RELEASE_KEY_PASSWORD: ${{ secrets.BIOPAY_RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew lintDebug assembleDebug --warning-mode fail
+          mv app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk"
+
+      - name: Verify debug APK
+        run: |
+          APK="app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk"
+          test -s "$APK"
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "$APK" > "$RUNNER_TEMP/debug-signature.txt"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v6
@@ -85,15 +106,22 @@ jobs:
           name: Debug
           if-no-files-found: error
           retention-days: 30
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk
 
-      - name: Restore signing keystore
-        if: steps.check_version.outputs.changed == 'true'
+      - name: Add missing Debug APK to existing release
+        if: steps.check_version.outputs.changed == 'false'
         env:
-          BIOPAY_RELEASE_KEYSTORE_BASE64: ${{ secrets.BIOPAY_RELEASE_KEYSTORE_BASE64 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.check_version.outputs.tag }}
         run: |
-          test -n "$BIOPAY_RELEASE_KEYSTORE_BASE64"
-          printf '%s' "$BIOPAY_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/biopay-release.keystore"
+          ASSET="BioPay-$RELEASE_TAG-Debug.apk"
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
+            echo 'Debug APK already published; leaving it unchanged.'
+          elif [ "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$(git rev-parse HEAD)" ]; then
+            echo '::notice::Source differs from the published tag; Debug is available in Artifacts only. Bump the version to publish it.'
+          else
+            gh release upload "$RELEASE_TAG" "app/build/outputs/apk/$ASSET"
+          fi
 
       - name: Build signed release APK
         if: steps.check_version.outputs.changed == 'true'
@@ -122,7 +150,10 @@ jobs:
           test "$ENTRY" = "$EXPECTED_ENTRY"
           # Signature valid.
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
-          "$APKSIGNER" verify "$APK"
+          "$APKSIGNER" verify --print-certs "$APK" > "$RUNNER_TEMP/release-signature.txt"
+          grep 'certificate SHA-256 digest:' "$RUNNER_TEMP/debug-signature.txt" > "$RUNNER_TEMP/debug-certificates.txt"
+          grep 'certificate SHA-256 digest:' "$RUNNER_TEMP/release-signature.txt" > "$RUNNER_TEMP/release-certificates.txt"
+          cmp "$RUNNER_TEMP/debug-certificates.txt" "$RUNNER_TEMP/release-certificates.txt"
 
       - name: Upload Release APK
         if: steps.check_version.outputs.changed == 'true'
@@ -151,3 +182,4 @@ jobs:
           body_path: changelog.txt
           files: |
             app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
+            app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk

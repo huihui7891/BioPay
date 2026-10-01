@@ -42,6 +42,9 @@ android {
         debug {
             isMinifyEnabled = false
             isDebuggable = true
+            signingConfigs.getByName("release").takeIf { it.storeFile?.exists() == true }?.let {
+                signingConfig = it
+            }
         }
         release {
             optimization {
