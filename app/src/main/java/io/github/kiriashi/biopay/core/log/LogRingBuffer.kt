@@ -41,10 +41,6 @@ class LogRingBuffer(
         buffer.append(line).append("\n")
     }
 
-    fun appendRaw(text: String) {
-        buffer.append(text)
-    }
-
     fun snapshot(): String = buffer.toString()
 
     fun clear() {

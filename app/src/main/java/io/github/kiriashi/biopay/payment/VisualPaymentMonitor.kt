@@ -206,7 +206,10 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             return@any false
         }
         val activity = root.context.findActivity() ?: lastPaymentActivity?.get() ?: return@any false
-        adapter.supports(activity) && adapter.observe(root, activity) != null
+        root.isAttachedToWindow && root.isShown && root.windowVisibility == View.VISIBLE &&
+            activity.application === state.app &&
+            !activity.isFinishing && !activity.isDestroyed &&
+            adapter.supports(activity) && adapter.observe(root, activity) != null
     }
 
     private fun paymentEnabled(): Boolean = state.prefs.isBioPayEnabled()

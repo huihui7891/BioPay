@@ -56,40 +56,36 @@ class ConfigStore(
 
     fun refresh() { if (!closed) sync.refresh() }
 
-    private fun background(task: () -> Unit, cleanup: () -> Unit) = synchronized(queueLock) {
-        if (closed) { cleanup(); return@synchronized }
-        try {
-            worker.value.execute {
-                try {
-                    if (!closed) task()
-                } catch (error: Exception) {
-                    ModuleLog.w(error) { "settings synchronization failed" }
-                } finally { cleanup() }
-            }
-        } catch (_: java.util.concurrent.RejectedExecutionException) { cleanup() }
-        Unit
-    }
+    private fun background(task: () -> Unit, cleanup: () -> Unit) = submit(
+        fallback = Unit, failure = "settings synchronization failed", cleanup = cleanup, work = task
+    )
 
     /** Serialized storage work; completion is delivered only to the live generation. */
     internal fun update(
         work: () -> Boolean,
         cleanup: () -> Unit = {},
         onComplete: (Boolean) -> Unit = {}
+    ) = submit(false, "settings update failed", cleanup, work, onComplete)
+
+    private fun <T> submit(
+        fallback: T,
+        failure: String,
+        cleanup: () -> Unit,
+        work: () -> T,
+        onComplete: ((T) -> Unit)? = null
     ) = synchronized(queueLock) {
         if (closed) { cleanup(); return@synchronized }
         try {
             worker.value.execute {
-                val saved = try {
-                    !closed && work()
+                val result = try {
+                    if (closed) fallback else work()
                 } catch (error: Exception) {
-                    ModuleLog.w(error) { "settings update failed" }
-                    false
+                    ModuleLog.w(error) { failure }
+                    fallback
                 } finally { cleanup() }
-                executor.execute { if (!closed) onComplete(saved) }
+                if (onComplete != null && !closed) executor.execute { if (!closed) onComplete(result) }
             }
-        } catch (_: java.util.concurrent.RejectedExecutionException) {
-            cleanup()
-        }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { cleanup() }
         Unit
     }
 

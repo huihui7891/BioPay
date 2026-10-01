@@ -5,6 +5,7 @@
  */
 package io.github.kiriashi.biopay.core.log
 
+import io.github.kiriashi.biopay.core.util.withFileLock
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.BroadcastReceiver
@@ -16,11 +17,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ResultReceiver
-import android.os.SystemClock
 import android.util.Base64
 import java.io.File
-import java.io.RandomAccessFile
-import java.nio.channels.OverlappingFileLockException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
@@ -165,26 +163,15 @@ internal class LogExport(
         @Synchronized
         private fun key(context: Context): ByteArray {
             cachedKey?.let { return it }
-            RandomAccessFile(File(context.noBackupFilesDir, "biopay_diagnostics.key"), "rw").use { file ->
-                val deadline = SystemClock.elapsedRealtime() + 2_000L
-                var acquired: java.nio.channels.FileLock? = null
-                while (acquired == null) {
-                    acquired = try { file.channel.tryLock() } catch (_: OverlappingFileLockException) { null }
-                    if (acquired == null) {
-                        check(SystemClock.elapsedRealtime() < deadline) { "Diagnostic key lock timed out" }
-                        Thread.sleep(10)
-                    }
+            return withFileLock(File(context.noBackupFilesDir, "biopay_diagnostics.key"), timeoutMillis = 2_000L) { file ->
+                if (file.length() == 0L) {
+                    val generated = ByteArray(32).also { SecureRandom().nextBytes(it) }
+                    file.write(generated)
+                    file.fd.sync()
                 }
-                acquired.use {
-                    if (file.length() == 0L) {
-                        val generated = ByteArray(32).also { SecureRandom().nextBytes(it) }
-                        file.write(generated)
-                        file.fd.sync()
-                    }
-                    check(file.length() == 32L) { "Invalid diagnostic key file" }
-                    file.seek(0)
-                    return ByteArray(32).also { file.readFully(it); cachedKey = it }
-                }
+                check(file.length() == 32L) { "Invalid diagnostic key file" }
+                file.seek(0)
+                ByteArray(32).also { file.readFully(it); cachedKey = it }
             }
         }
     }

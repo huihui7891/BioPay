@@ -19,6 +19,7 @@ import io.github.kiriashi.biopay.apps.VisualPaymentAdapter
 import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.apps.AppComponents
 import io.github.kiriashi.biopay.apps.qq.QqMenuEntryHook
+import io.github.kiriashi.biopay.apps.wechat.WeChatMenu
 import io.github.kiriashi.biopay.apps.shared.EntryInstaller
 import io.github.kiriashi.biopay.payment.PaymentFlow
 import io.github.kiriashi.biopay.payment.PaymentWindowRoots
@@ -40,6 +41,7 @@ class AppRuntime private constructor(
         app.getSharedPreferences(PrefKeys.prefName, Context.MODE_PRIVATE),
         adapter.app
     )
+    internal val weChatMenu = if (adapter.app == PaymentApp.WECHAT && Application.getProcessName() == app.packageName) WeChatMenu(this) else null
     val flow = PaymentFlow(this)
     val session = PaymentSession(onDestroy = flow::reset)
     private val uiTasks = MainTasks()
@@ -156,6 +158,7 @@ class AppRuntime private constructor(
         closed = true
         uiTasks.close()
         uiTasks.onMain {
+            weChatMenu?.close()
             val active = dialogs.values.toList()
             dialogs.clear()
             active.forEach { it.dismiss() }

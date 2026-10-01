@@ -17,6 +17,7 @@ internal class PaymentViewTree(val root: ViewGroup) {
     var complete = true
         private set
     val all: List<View> = buildList {
+        if (!root.isShown) return@buildList
         val pending = ArrayDeque<View>()
         pending.add(root)
         while (pending.isNotEmpty()) {
@@ -25,7 +26,8 @@ internal class PaymentViewTree(val root: ViewGroup) {
                 break
             }
             val view = pending.removeLast()
-            if (!view.isShown) continue
+            // Every ancestor in this walk has already passed the visibility check.
+            if (view.visibility != View.VISIBLE) continue
             add(view)
             if (view is ViewGroup) {
                 for (index in 0 until view.childCount) pending.add(view.getChildAt(index))

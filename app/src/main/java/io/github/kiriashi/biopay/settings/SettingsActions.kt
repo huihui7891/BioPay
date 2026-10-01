@@ -37,7 +37,7 @@ object SettingsActions {
             }
             return
         }
-        val password = input.text.toString().trim()
+        val password = input.text?.trim() ?: ""
         if (password.isEmpty()) {
             if (state.prefs.needsPasswordReentry() ||
                 PasswordVersionPolicy.requiresReentry(state.prefs.getEncodedPassword(), state.prefs.getPasswordVersion())) {
@@ -53,7 +53,7 @@ object SettingsActions {
             showToast(context, "密码必须是6位数字")
             return
         }
-        val chars = password.toCharArray()
+        val chars = CharArray(password.length) { password[it] }
         authenticateWithBiometric(context, host, state, biometricType = type, cleanup = { chars.fill('\u0000') }) {
             val cipher = PasswordCipher.createEncryptionCipher(state.app, state.adapter.app.packageName)
             state.prefs.savePassword(chars, cipher, PasswordVersionPolicy.current, type).isSuccess

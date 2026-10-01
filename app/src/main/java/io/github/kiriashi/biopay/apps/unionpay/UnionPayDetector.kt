@@ -30,7 +30,7 @@ internal object UnionPayDetector : PaymentDetector {
         if (views.hasText("设置支付密码", "修改支付密码", "重置支付密码", "Payment password settings")) return null
         if (!views.hasText("请输入支付密码", "請輸入支付密碼", "Input payment password")) return null
         val keys = PaymentKeypad.textKeys(views) ?: return null
-        return PaymentKeypad.group(root, keys)?.let(::PaymentScreen)
+        return PaymentKeypad.group(root, keys)?.let { PaymentScreen(it, digitKeys = keys) }
     }
 
     /** Native wallet pages name their custom field; React Native uses five dividers. */

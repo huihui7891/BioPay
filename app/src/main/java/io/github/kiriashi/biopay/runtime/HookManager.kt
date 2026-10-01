@@ -10,7 +10,7 @@ import io.github.kiriashi.biopay.apps.PaymentApp
 import io.github.kiriashi.biopay.apps.qq.QqMenuEntryHook
 import io.github.kiriashi.biopay.apps.wechat.FingerprintTipHook
 import io.github.kiriashi.biopay.apps.wechat.KeyboardWindowHook
-import io.github.kiriashi.biopay.apps.wechat.PullDownHook
+import io.github.kiriashi.biopay.apps.wechat.WeChatMenu
 import io.github.kiriashi.biopay.apps.wechat.TopActivityProvider
 import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.libxposed.api.XposedInterface
@@ -69,14 +69,14 @@ object HookManager {
             necessary: Boolean = false,
             interceptor: XposedInterface.Hooker,
             register: () -> XposedInterface.HookHandle?
-        ) {
+        ): Boolean {
             val old = oldHandles.firstOrNull { it.id == id && it !in handled }
             if (old != null) {
                 try {
                     old.replaceHook(interceptor)
                     handled += old
                     installed += old
-                    return
+                    return true
                 } catch (error: Throwable) {
                     ModuleLog.w(error) { "hot reload: replacing $id failed; reinstalling" }
                     if (runCatching { old.unhook() }.isSuccess) {
@@ -84,7 +84,7 @@ object HookManager {
                     } else {
                         // Do not add a duplicate interceptor while its predecessor remains attached.
                         if (necessary) required += id else optional += id
-                        return
+                        return false
                     }
                 }
             }
@@ -93,14 +93,17 @@ object HookManager {
             }.getOrNull()
             if (handle != null) installed += handle
             else if (necessary) required += id else optional += id
+            return handle != null
         }
 
         bind(VolumeKeyHook.HOOK_ID, interceptor = VolumeKeyHook.makeInterceptor(state)) {
             VolumeKeyHook.registerActivity(xposed, state)
         }
         if (app == PaymentApp.WECHAT) {
-            bind(PullDownHook.HOOK_ID, interceptor = PullDownHook.makeInterceptor(state)) {
-                PullDownHook.register(cl, xposed, state)
+            state.weChatMenu?.let { menu ->
+                menu.ready = listOf(WeChatMenu.CLICK_ID, WeChatMenu.ROW_ID, WeChatMenu.SHOW_ID).map { id ->
+                    bind(id, interceptor = menu.interceptor(id)) { menu.register(xposed, id) }
+                }.all { it }
             }
             bind(KeyboardWindowHook.HOOK_ID, true, KeyboardWindowHook.makeInterceptor(state)) {
                 KeyboardWindowHook.register(cl, xposed, state)

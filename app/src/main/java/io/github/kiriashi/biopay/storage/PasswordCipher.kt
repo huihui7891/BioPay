@@ -20,17 +20,15 @@
 package io.github.kiriashi.biopay.storage
 
 import io.github.kiriashi.biopay.core.log.ModuleLog
+import io.github.kiriashi.biopay.core.util.withFileLock
 import android.content.Context
 import android.os.Build
-import android.os.SystemClock
 import android.security.KeyStoreException
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.io.File
-import java.io.RandomAccessFile
-import java.nio.channels.OverlappingFileLockException
 import java.security.KeyStore
 import java.security.UnrecoverableKeyException
 import javax.crypto.Cipher
@@ -106,7 +104,7 @@ object PasswordCipher {
     fun createEncryptionCipher(context: Context, packageName: String): Cipher {
         require(context.packageName == packageName) { "payment password owner mismatch" }
         return synchronized(keyStoreLock) {
-            withKeyLock(context) {
+            withFileLock(File(context.filesDir, "biopay_password_key.lock")) {
                 try {
                     encryptionCipher(packageName)
                 } catch (error: Exception) {
@@ -158,21 +156,6 @@ object PasswordCipher {
             current = cause.cause
         }
         return false
-    }
-
-    private fun <T> withKeyLock(context: Context, action: () -> T): T {
-        RandomAccessFile(File(context.filesDir, "biopay_password_key.lock"), "rw").use { file ->
-            val deadline = SystemClock.elapsedRealtime() + 5_000L
-            var acquired: java.nio.channels.FileLock? = null
-            while (acquired == null) {
-                acquired = try { file.channel.tryLock() } catch (_: OverlappingFileLockException) { null }
-                if (acquired == null) {
-                    check(SystemClock.elapsedRealtime() < deadline) { "Payment encryption key lock timed out" }
-                    Thread.sleep(10)
-                }
-            }
-            acquired.use { return action() }
-        }
     }
 
     fun encrypt(plainText: CharArray, cipher: Cipher): String {

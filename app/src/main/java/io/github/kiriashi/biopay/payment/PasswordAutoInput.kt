@@ -30,6 +30,7 @@ import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.kiriashi.biopay.storage.PaymentConfig
+import io.github.kiriashi.biopay.storage.PasswordCipher
 import java.lang.ref.WeakReference
 import java.util.concurrent.ThreadLocalRandom
 
@@ -59,7 +60,7 @@ object PasswordAutoInput {
     internal fun autoInputPassword(keyboardView: ViewGroup, passwordChars: CharArray,
                           state: AppRuntime, sessionId: Long, config: PaymentConfig): Boolean {
         try {
-            if (passwordChars.size != 6 || passwordChars.any { it !in '0'..'9' } ||
+            if (passwordChars.size != PasswordCipher.PASSWORD_LENGTH || passwordChars.any { it !in '0'..'9' } ||
                 state.isClosed || !state.session.isCurrentSession(sessionId) ||
                 state.session.getCurrentKeyboardView() !== keyboardView ||
                 state.session.currentConfig() != config || !state.prefs.isCurrent(config) ||
@@ -117,7 +118,7 @@ object PasswordAutoInput {
                     return submitted
                 }
             }
-            val digits = state.adapter.digitKeys(keyboardView) ?: return false
+            val digits = screen?.digitKeys ?: state.adapter.digitKeys(keyboardView) ?: return false
             if (digits.size != 10) return false
             val keys = passwordChars.map { digit ->
                 val key = digits[digit - '0'] ?: return false

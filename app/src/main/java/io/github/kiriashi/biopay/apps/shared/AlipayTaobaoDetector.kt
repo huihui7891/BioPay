@@ -37,7 +37,7 @@ internal object AlipayTaobaoDetector : PaymentDetector {
             PaymentViewTree(hostRoot).let { it.complete && hasPaymentUi(it) })
         if (!passwordUi && !(halfScreen && namedKey1)) return null
         val keys = PaymentKeypad.namedKeys(views, keyPrefixes) ?: PaymentKeypad.textKeys(views)
-        if (keys != null) PaymentKeypad.group(root, keys)?.let { return PaymentScreen(it) }
+        if (keys != null) PaymentKeypad.group(root, keys)?.let { return PaymentScreen(it, digitKeys = keys) }
 
         // Some verifyidentity and long-password pages use an EditText and OK button
         // instead of ten Android keypad views. Keep both controls in the same window.

@@ -5,11 +5,9 @@
  */
 package io.github.kiriashi.biopay.storage
 
+import io.github.kiriashi.biopay.core.util.withFileLock
 import android.content.Context
 import java.io.File
-import java.io.RandomAccessFile
-import java.nio.channels.OverlappingFileLockException
-import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -69,24 +67,13 @@ internal object SettingsBroadcastAuth {
             val store = KeyStore.getInstance(KEYSTORE).apply { load(null) }
             if (!store.containsAlias(KEY_ALIAS)) {
                 // The host and payment processes can initialize the same UID's alias together.
-                RandomAccessFile(File(context.filesDir, "biopay_settings_key.lock"), "rw").use { file ->
-                    val deadline = SystemClock.elapsedRealtime() + 5_000L
-                    var acquired: java.nio.channels.FileLock? = null
-                    while (acquired == null) {
-                        acquired = try { file.channel.tryLock() } catch (_: OverlappingFileLockException) { null }
-                        if (acquired == null) {
-                            check(SystemClock.elapsedRealtime() < deadline) { "Settings key lock timed out" }
-                            Thread.sleep(10)
-                        }
-                    }
-                    acquired.use {
-                        if (!store.containsAlias(KEY_ALIAS)) {
-                            val spec = KeyGenParameterSpec.Builder(
-                                KEY_ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-                            ).setDigests(KeyProperties.DIGEST_SHA256).build()
-                            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, KEYSTORE)
-                                .apply { init(spec) }.generateKey()
-                        }
+                withFileLock(File(context.filesDir, "biopay_settings_key.lock")) {
+                    if (!store.containsAlias(KEY_ALIAS)) {
+                        val spec = KeyGenParameterSpec.Builder(
+                            KEY_ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+                        ).setDigests(KeyProperties.DIGEST_SHA256).build()
+                        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, KEYSTORE)
+                            .apply { init(spec) }.generateKey()
                     }
                 }
             }
