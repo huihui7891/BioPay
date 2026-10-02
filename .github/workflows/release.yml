@@ -108,15 +108,29 @@ jobs:
           retention-days: 30
           path: app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk
 
-      - name: Add missing Debug APK to existing release
+      - name: Package Debug APK for Releases
+        env:
+          RELEASE_TAG: ${{ steps.check_version.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+          apk = Path('app/build/outputs/apk') / f"BioPay-{os.environ['RELEASE_TAG']}-Debug.apk"
+          with ZipFile(apk.with_suffix('.zip'), 'w', compression=ZIP_DEFLATED, compresslevel=6) as archive:
+              archive.write(apk, arcname=apk.name)
+          PY
+
+      - name: Add missing Debug archive to existing release
         if: steps.check_version.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.check_version.outputs.tag }}
         run: |
-          ASSET="BioPay-$RELEASE_TAG-Debug.apk"
-          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
-            echo 'Debug APK already published; leaving it unchanged.'
+          ASSET="BioPay-$RELEASE_TAG-Debug.zip"
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/release-assets.txt"
+          if grep -Fxq "$ASSET" "$RUNNER_TEMP/release-assets.txt" || grep -Fxq "BioPay-$RELEASE_TAG-Debug.apk" "$RUNNER_TEMP/release-assets.txt"; then
+            echo 'Debug asset already published; leaving it unchanged.'
           elif [ "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$(git rev-parse HEAD)" ]; then
             echo '::notice::Source differs from the published tag; Debug is available in Artifacts only. Bump the version to publish it.'
           else
@@ -182,4 +196,4 @@ jobs:
           body_path: changelog.txt
           files: |
             app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}.apk
-            app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.apk
+            app/build/outputs/apk/BioPay-${{ steps.check_version.outputs.tag }}-Debug.zip
