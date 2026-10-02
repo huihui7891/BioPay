@@ -40,18 +40,19 @@ internal class WeChatMenu(private val state: AppRuntime) {
     private data class Edit(val original: SparseArray<*>, val installed: SparseArray<Any>)
     private val edits = WeakHashMap<Any, Edit>()
     private var itemShape: ItemShape? = null
+    private val itemIds = HashSet<Int>()
 
     private data class ItemShape(
         val wrapper: Constructor<*>, val item: Constructor<*>,
         val definition: Field, val id: Field, val label: Field
     ) {
-        fun create(): Any = wrapper.newInstance(item.newInstance(ITEM_ID, LABEL, "", 0, 0))
+        fun create(itemId: Int): Any = wrapper.newInstance(item.newInstance(itemId, LABEL, "", 0, 0))
 
         fun idOf(entry: Any): Int = id.getInt(definition.get(entry))
 
-        fun matches(entry: Any): Boolean {
+        fun matches(entry: Any, itemIds: Set<Int>): Boolean {
             val value = definition.get(entry) ?: return false
-            return id.getInt(value) == ITEM_ID && label.get(value) == LABEL
+            return id.getInt(value) in itemIds && label.get(value) == LABEL
         }
     }
 
@@ -112,23 +113,28 @@ internal class WeChatMenu(private val state: AppRuntime) {
         if (previous?.installed === source && (0 until source.size()).any { isModuleItem(source, it) }) return
         if (source.size() == 0) return
 
-        val template = source.valueAt(0) ?: return
-        val fields = itemShape ?: resolveItem(template).also { itemShape = it }
-        val wrapper = fields.create()
+        val fields = resolveItems(source) ?: return
+        val occupiedIds = HashSet<Int>()
+        for (index in 0 until source.size()) {
+            val entry = source.valueAt(index) ?: continue
+            if (!isModuleEntry(entry)) occupiedIds += fields.idOf(entry)
+        }
+        var itemId = ITEM_ID
+        while (itemId in occupiedIds) {
+            check(itemId > Int.MIN_VALUE) { "No available WeChat menu item ID" }
+            itemId--
+        }
+        val wrapper = fields.create(itemId)
+        itemIds += itemId
 
         // Dynamic configuration may share the original map; only replace this menu's reference.
         val copy = SparseArray<Any>(source.size() + 1)
-        var inserted = false
         for (index in 0 until source.size()) {
             val entry = source.valueAt(index) ?: continue
             if (isModuleEntry(entry)) continue
             copy.put(copy.size(), entry)
-            if (!inserted && fields.idOf(entry) == PAYMENT_ITEM_ID) {
-                copy.put(copy.size(), wrapper)
-                inserted = true
-            }
         }
-        if (!inserted) copy.put(copy.size(), wrapper)
+        copy.put(copy.size(), wrapper)
         shape.items.set(menu, copy)
         edits[menu] = Edit(source, copy)
         ModuleLog.d { "WeChat action menu entry installed" }
@@ -138,8 +144,20 @@ internal class WeChatMenu(private val state: AppRuntime) {
         items?.get(position)?.let(::isModuleEntry) == true
 
     private fun isModuleEntry(entry: Any): Boolean = runCatching {
-        itemShape?.matches(entry) == true
+        itemShape?.matches(entry, itemIds) == true
     }.getOrDefault(false)
+
+    private fun resolveItems(source: SparseArray<*>): ItemShape? {
+        itemShape?.let { return it }
+        for (index in 0 until source.size()) {
+            val template = source.valueAt(index) ?: continue
+            val fields = runCatching { resolveItem(template) }.getOrNull() ?: continue
+            itemShape = fields
+            return fields
+        }
+        ModuleLog.w { "WeChat action menu has no compatible item template" }
+        return null
+    }
 
     private fun resolveItem(template: Any): ItemShape {
         val definition = template.javaClass.declaredFields.single { field ->
@@ -158,10 +176,19 @@ internal class WeChatMenu(private val state: AppRuntime) {
 
     private fun decorate(row: ViewGroup) {
         val title = findTitle(row) ?: return
-        val icon = row.getChildAt(0) as? ImageView ?: return
+        val icon = findIcon(row) ?: return
         icon.setImageDrawable(MenuIcon(title.currentTextColor))
         icon.visibility = View.VISIBLE
         icon.contentDescription = null
+    }
+
+    private fun findIcon(view: View, depth: Int = 0): ImageView? {
+        if (view is ImageView) return view
+        if (view !is ViewGroup || depth >= 5) return null
+        for (index in 0 until view.childCount) {
+            findIcon(view.getChildAt(index), depth + 1)?.let { return it }
+        }
+        return null
     }
 
     private fun findTitle(view: View, depth: Int = 0): TextView? {
@@ -177,6 +204,7 @@ internal class WeChatMenu(private val state: AppRuntime) {
         ready = false
         if (edits.isEmpty()) {
             itemShape = null
+            itemIds.clear()
             return
         }
         val shape = schema ?: return
@@ -193,6 +221,7 @@ internal class WeChatMenu(private val state: AppRuntime) {
         }
         edits.clear()
         itemShape = null
+        itemIds.clear()
     }
 
     private data class Schema(
@@ -212,9 +241,7 @@ internal class WeChatMenu(private val state: AppRuntime) {
         val adapter = menu.declaredFields.single { BaseAdapter::class.java.isAssignableFrom(it.type) }.type
         val owner = adapter.declaredFields.single { it.type == menu }
         val base = menu.superclass!!
-        val show = base.declaredMethods.single {
-            it.returnType == Boolean::class.javaPrimitiveType && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
-        }
+        val show = resolveShow(menu, base)
         val dismiss = base.getDeclaredMethod("a")
         check(dismiss.returnType == Void.TYPE && !Modifier.isStatic(dismiss.modifiers))
         val click = menu.getDeclaredMethod("onItemClick", AdapterView::class.java, View::class.java, Int::class.javaPrimitiveType, Long::class.javaPrimitiveType)
@@ -224,12 +251,33 @@ internal class WeChatMenu(private val state: AppRuntime) {
         return Schema(menu, items, context, owner, show, dismiss, click, row)
     }
 
+    private fun resolveShow(menu: Class<*>, base: Class<*>): Method {
+        val candidates = base.declaredMethods.filter {
+            it.returnType == Boolean::class.javaPrimitiveType &&
+                !Modifier.isStatic(it.modifiers) && !Modifier.isAbstract(it.modifiers)
+        }
+        val withOffset = candidates.filter {
+            it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        }
+        if (withOffset.isNotEmpty()) return withOffset.single()
+
+        // Older menus rebuild their items in the override, then let the parent measure the popup.
+        // Match that override to avoid hooking the parent's unrelated visibility query.
+        val overrides = menu.declaredMethods.filter {
+            it.returnType == Boolean::class.javaPrimitiveType && it.parameterCount == 0 &&
+                !Modifier.isStatic(it.modifiers) && !Modifier.isPrivate(it.modifiers) &&
+                !Modifier.isAbstract(it.modifiers)
+        }.map { it.name }.toSet()
+        return candidates.single {
+            it.parameterCount == 0 && !Modifier.isPrivate(it.modifiers) && it.name in overrides
+        }
+    }
+
     companion object {
         const val SHOW_ID = "bp_wechat_menu_show"
         const val CLICK_ID = "bp_wechat_menu_click"
         const val ROW_ID = "bp_wechat_menu_row"
         private const val ITEM_ID = -16976
-        private const val PAYMENT_ITEM_ID = 20
         private const val LABEL = "生物支付"
         private val ITEM_PARAMETERS = arrayOf(Int::class.javaPrimitiveType, String::class.java, String::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
     }

@@ -25,6 +25,7 @@ object DialogShowHook {
 
     fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker = XposedInterface.Hooker { chain ->
         val result = chain.proceed()
+        if (state.isClosed || !state.prefs.isBioPayEnabled()) return@Hooker result
         try {
             (chain.thisObject as? Dialog)?.let { dialog ->
                 if (!state.isClosed) state.visualMonitor?.watchDialog(dialog)

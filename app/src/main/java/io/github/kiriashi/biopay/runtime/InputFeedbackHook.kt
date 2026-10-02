@@ -22,21 +22,33 @@ internal object InputFeedbackHook {
         val methods = View::class.java.declaredMethods.filter {
             it.name == "performHapticFeedback" && it.returnType == Boolean::class.javaPrimitiveType
         }.toMutableList()
-        // The concrete vibrator and manager cover both legacy and modern APIs.
-        // Resolve implementations at runtime because Android versions differ.
+        // Keep each service's concrete dispatch boundary, rather than its forwarding overloads.
         for (service in listOf(Context.VIBRATOR_SERVICE, "vibrator_manager")) {
             runCatching {
-                var type: Class<*>? = state.app.getSystemService(service)?.javaClass
-                while (type != null && type != Any::class.java) {
-                    methods += type.declaredMethods.filter {
-                        it.name == "vibrate" && it.returnType == Void.TYPE &&
-                            !Modifier.isAbstract(it.modifiers)
-                    }
-                    type = type.superclass
-                }
+                val type = state.app.getSystemService(service)?.javaClass ?: continue
+                methods += dispatchMethods(type)
             }.onFailure { ModuleLog.w(it) { "input feedback target lookup failed: $service" } }
         }
         return methods.distinct()
+    }
+
+    private fun dispatchMethods(type: Class<*>): List<Method> {
+        val implementations = LinkedHashMap<List<Class<*>>, Method>()
+        val boundaries = HashSet<List<Class<*>>>()
+        var current: Class<*>? = type
+        while (current != null && current != Any::class.java) {
+            for (method in current.declaredMethods) {
+                if (method.name != "vibrate" || method.returnType != Void.TYPE ||
+                    Modifier.isStatic(method.modifiers)) continue
+                val signature = method.parameterTypes.toList()
+                if (Modifier.isAbstract(method.modifiers)) boundaries += signature
+                else implementations.putIfAbsent(signature, method)
+            }
+            current = current.superclass
+        }
+        val dispatch = implementations.filterKeys { it in boundaries }.values.toList()
+        // Preserve vendor implementations that expose no abstract dispatch boundary.
+        return dispatch.ifEmpty { implementations.values.toList() }
     }
 
     fun id(method: Method): String = "bp_input_feedback:${method.declaringClass.name}:" +

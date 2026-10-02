@@ -40,6 +40,7 @@ class BioPayModule : XposedModule() {
     private val initLock = Any()
     @Volatile private var initializedApplication: Application? = null
     private var applicationHooksRegistered = false
+    private val bootstrapHandles = mutableListOf<XposedInterface.HookHandle>()
     private var lifecycleCallbacks: AppLifecycleCallbacks? = null
     private var pendingSettings: Bundle? = null
     @Volatile private var processName: String? = null
@@ -199,12 +200,18 @@ class BioPayModule : XposedModule() {
         val handled = HashSet<XposedInterface.HookHandle>()
         var installed = false
 
+        fun track(handle: XposedInterface.HookHandle) = synchronized(initLock) {
+            bootstrapHandles += handle
+            if (initializedApplication != null) removeBootstrapHooks()
+        }
+
         fun bind(id: String, method: java.lang.reflect.Executable, interceptor: XposedInterface.Hooker) {
             val old = oldHandles.firstOrNull { it.id == id && it !in handled }
             if (old != null) {
                 try {
                     old.replaceHook(interceptor)
                     handled += old
+                    track(old)
                     installed = true
                     return
                 } catch (e: Throwable) {
@@ -214,7 +221,8 @@ class BioPayModule : XposedModule() {
                 }
             }
             try {
-                hook(method).setId(id).intercept(interceptor)
+                val handle = hook(method).setId(id).intercept(interceptor)
+                track(handle)
                 installed = true
             } catch (e: Throwable) {
                 ModuleLog.w(e) { "$id hook registration failed" }
@@ -273,7 +281,10 @@ class BioPayModule : XposedModule() {
         synchronized(initLock) {
             // Some hosts create several Application objects in one process. Their
             // lifecycle callbacks observe the same Activities, so keep one state.
-            if (initializedApplication != null) return
+            if (initializedApplication != null) {
+                removeBootstrapHooks()
+                return
+            }
             val adapter = AppComponents.adapterFor(targetApp.packageName) ?: return
             val state = AppRuntime.create(application, adapter).also {
                 it.prefs.restoreState(pendingSettings)
@@ -295,6 +306,17 @@ class BioPayModule : XposedModule() {
             targetPackageName = targetApp.packageName
             this.processName = this.processName ?: currentProcessName
             hooks.report(reloading = false)
+            removeBootstrapHooks()
+        }
+    }
+
+    private fun removeBootstrapHooks() {
+        val iterator = bootstrapHandles.iterator()
+        while (iterator.hasNext()) {
+            val handle = iterator.next()
+            runCatching { handle.unhook() }.onSuccess { iterator.remove() }.onFailure {
+                ModuleLog.w(it) { "bootstrap hook removal failed: ${handle.id}" }
+            }
         }
     }
 

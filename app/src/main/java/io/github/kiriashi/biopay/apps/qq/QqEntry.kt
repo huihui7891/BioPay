@@ -21,7 +21,6 @@ import android.widget.TextView
 import io.github.kiriashi.biopay.apps.shared.ENTRY_TAG
 import io.github.kiriashi.biopay.apps.shared.EntryInstaller
 import io.github.kiriashi.biopay.apps.shared.SettingsEntry
-import io.github.kiriashi.biopay.apps.shared.findVisibleText
 import io.github.kiriashi.biopay.apps.shared.visitViews
 import io.github.kiriashi.biopay.apps.shared.toSp
 import io.github.kiriashi.biopay.core.util.dp
@@ -30,36 +29,39 @@ import java.lang.ref.WeakReference
 private const val QQ_ICON_PERSON_SCALE = 0.81f
 
 internal object QqEntry : SettingsEntry {
+    internal fun matchesMenu(root: ViewGroup): Boolean = findMenu(root) != null
+
     override fun install(host: EntryInstaller, activity: Activity, root: ViewGroup): Boolean =
         host.installQqMenu(activity, root)
 
     override fun onExisting(host: EntryInstaller, activity: Activity, root: ViewGroup, existing: View) {
         if (activity.packageName != "com.tencent.mobileqq") return
-        val paymentLabel = findVisibleText(root, "收付款", "Receive and Pay", "Payments") ?: return
-        val paymentRow = findQqMenuRow(paymentLabel, root) ?: return
-        QqMenuEntryHook.expandForEntry(root, menuRowHeight(paymentRow, activity))
+        val menu = findMenu(root) ?: return
+        if (existing.parent !== menu.container) return
+        if (menu.container.indexOfChild(existing) != menu.container.childCount - 1) {
+            menu.container.removeView(existing)
+            menu.container.addView(existing)
+        }
+        QqMenuEntryHook.expandForEntry(root, menuRowHeight(menu.row, activity))
     }
 }
 
 internal fun EntryInstaller.installQqMenu(activity: Activity, root: ViewGroup): Boolean {
     if (activity.packageName != "com.tencent.mobileqq") return false
-    val paymentLabel = findVisibleText(root, "收付款", "Receive and Pay", "Payments") ?: return false
-    val paymentRow = findQqMenuRow(paymentLabel, root) ?: return false
-    val container = paymentRow.parent as? ViewGroup ?: return false
-    val paymentIndex = container.indexOfChild(paymentRow)
-    if (paymentIndex < 0) return false
-    if ((paymentIndex + 1 until container.childCount).any { container.getChildAt(it).tag == ENTRY_TAG }) return true
-
-    val labelStyle = paymentLabel as? TextView ?: return false
-    val nativeIcon = findLeadingIcon(paymentRow, paymentLabel)
-    val rowHeight = menuRowHeight(paymentRow, activity)
+    val menu = findMenu(root) ?: return false
+    val container = menu.container
+    val nativeRow = menu.row
+    val labelStyle = menu.label
+    if ((0 until container.childCount).any { container.getChildAt(it).tag == ENTRY_TAG }) return true
+    val nativeIcon = findLeadingIcon(nativeRow, labelStyle)
+    val rowHeight = menuRowHeight(nativeRow, activity)
     val iconWidth = nativeIcon?.let(::viewWidth)?.takeIf { it > 0 } ?: activity.dp(22)
     val iconHeight = nativeIcon?.let(::viewHeight)?.takeIf { it > 0 } ?: activity.dp(22)
-    val iconLeft = nativeIcon?.let { relativeLeft(it, paymentRow) }?.takeIf { it >= 0 } ?: activity.dp(12)
-    val labelLeft = relativeLeft(paymentLabel, paymentRow)?.takeIf { it > iconLeft + iconWidth }
+    val iconLeft = nativeIcon?.let { relativeLeft(it, nativeRow) }?.takeIf { it >= 0 } ?: activity.dp(12)
+    val labelLeft = relativeLeft(labelStyle, nativeRow)?.takeIf { it > iconLeft + iconWidth }
         ?: (iconLeft + iconWidth + activity.dp(16))
     val iconColor = nativeIcon?.let(::iconTint) ?: labelStyle.currentTextColor
-    val context = paymentLabel.context
+    val context = labelStyle.context
 
     val row = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -69,12 +71,12 @@ internal fun EntryInstaller.installQqMenu(activity: Activity, root: ViewGroup): 
         isFocusable = true
         minimumHeight = rowHeight
         setPadding(0, 0, 0, 0)
-        val backgroundCopy = copyDrawable(paymentRow.background, context)
-        val foregroundCopy = copyDrawable(paymentRow.foreground, context)
+        val backgroundCopy = copyDrawable(nativeRow.background, context)
+        val foregroundCopy = copyDrawable(nativeRow.foreground, context)
         if (backgroundCopy != null) setBackground(backgroundCopy)
         else if (foregroundCopy == null) selectableBackground(context)?.let(::setForeground)
         foregroundCopy?.let(::setForeground)
-        stateListAnimator = paymentRow.stateListAnimator
+        stateListAnimator = nativeRow.stateListAnimator
         setOnClickListener {
             QqMenuEntryHook.dismiss(root)
             openSettings(activity)
@@ -96,16 +98,50 @@ internal fun EntryInstaller.installQqMenu(activity: Activity, root: ViewGroup): 
         leftMargin = labelLeft - iconLeft - iconWidth
     })
 
-    val params = copyLayoutParams(paymentRow.layoutParams, rowHeight)
-    container.addView(row, paymentIndex + 1, params)
+    val params = copyLayoutParams(nativeRow.layoutParams, rowHeight)
+    container.addView(row, params)
     val restorePopupSize = QqMenuEntryHook.expandForEntry(root, rowHeight)
     val rowRef = WeakReference<View>(row)
     record(activity) {
         rowRef.get()?.let { inserted -> (inserted.parent as? ViewGroup)?.removeView(inserted) }
         restorePopupSize()
     }
-    ModuleLog.d { "QQ chat action menu entry inserted below 收付款" }
+    ModuleLog.d { "QQ chat action menu entry appended to menu" }
     return true
+}
+
+private data class QqMenu(val container: ViewGroup, val row: ViewGroup, val label: TextView)
+
+private val MENU_LABELS = listOf(
+    setOf("发起群聊", "创建群聊", "發起群聊", "Create Group Chat", "Start Group Chat"),
+    setOf("添加好友", "加好友", "加好友/群", "添加好友/群", "新增好友", "Add Friends", "Add Contacts"),
+    setOf("扫一扫", "掃一掃", "Scan", "Scan QR Code"),
+    setOf("面对面快传", "面對面快傳", "Face-to-Face Transfer")
+)
+
+private fun findMenu(root: ViewGroup): QqMenu? {
+    data class Anchor(val group: Int, val row: ViewGroup, val label: TextView)
+    val anchors = mutableListOf<Anchor>()
+    visitViews(root) { view ->
+        if (view is TextView && view.isShown) {
+            val text = view.text?.toString()?.trim()
+            val group = MENU_LABELS.indexOfFirst { text in it }
+            if (group >= 0) {
+                findQqMenuRow(view, root)?.let { anchors += Anchor(group, it, view) }
+            }
+        }
+        false
+    }
+    // Confirm several chat actions in one container; an arbitrary popup is not an entry target.
+    val groups = anchors.groupBy { it.row.parent as? ViewGroup }
+        .filter { (container, rows) ->
+            container != null && rows.map { it.group }.distinct().size >= 2 &&
+                rows.map { it.row }.distinct().size >= 2
+        }
+    val match = groups.entries.singleOrNull() ?: return null
+    val container = match.key ?: return null
+    val template = match.value.maxBy { container.indexOfChild(it.row) }
+    return QqMenu(container, template.row, template.label)
 }
 
 private fun findQqMenuRow(label: View, root: ViewGroup): ViewGroup? {

@@ -75,11 +75,19 @@ internal object QqMenuEntryHook {
         val result = chain.proceed()
         try {
             val root = chain.args.firstOrNull() as? ViewGroup
-            if (root != null) {
+            if (root != null && !state.isClosed) {
+                val inspectPayment = PaymentWindowHook.shouldInspect(state, root)
+                val popupWindow = root.layoutParams as? WindowManager.LayoutParams
+                val inspectEntry = popupWindow?.type in
+                    WindowManager.LayoutParams.FIRST_SUB_WINDOW..WindowManager.LayoutParams.LAST_SUB_WINDOW
+                if (!inspectPayment && !inspectEntry) return@Hooker result
                 root.post {
                     if (state.isClosed || !root.isAttachedToWindow) return@post
-                    runCatching { state.visualMonitor?.watchWindow(root) }
-                        .onFailure { ModuleLog.w(it) { "QQ payment window inspection failed" } }
+                    if (PaymentWindowHook.shouldInspect(state, root)) {
+                        runCatching { state.visualMonitor?.watchWindow(root) }
+                            .onFailure { ModuleLog.w(it) { "QQ payment window inspection failed" } }
+                    }
+                    if (!inspectEntry) return@post
                     val activity = root.context.findActivity()
                     if (activity?.packageName != state.app.packageName) return@post
                     runCatching {
@@ -97,12 +105,14 @@ internal object QqMenuEntryHook {
 
     fun makePopupInterceptor(state: AppRuntime): XposedInterface.Hooker = XposedInterface.Hooker { chain ->
         val result = chain.proceed()
+        if (state.isClosed) return@Hooker result
         try {
             val popup = chain.thisObject as? PopupWindow
             val content = popup?.contentView
             val root = content?.rootView
             val activity = content?.context?.findActivity()
-            if (popup?.isShowing == true && content != null && root != null && activity?.packageName == state.app.packageName) {
+            if (popup?.isShowing == true && content is ViewGroup && root != null &&
+                activity?.packageName == state.app.packageName && QqEntry.matchesMenu(content)) {
                 synchronized(popups) {
                     val reference = WeakReference(popup)
                     popups[root] = reference

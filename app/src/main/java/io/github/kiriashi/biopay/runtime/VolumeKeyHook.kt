@@ -51,23 +51,23 @@ object VolumeKeyHook {
     }
     fun makeInterceptor(state: AppRuntime): XposedInterface.Hooker {
         return XposedInterface.Hooker { chain ->
+            if (state.isClosed) return@Hooker chain.proceed()
+            val event = chain.args[0] as? KeyEvent ?: return@Hooker chain.proceed()
+            val keyCode = event.keyCode
+            if (keyCode != KeyEvent.KEYCODE_VOLUME_UP && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) {
+                return@Hooker chain.proceed()
+            }
             try {
                 val keyboard = state.session.getCurrentKeyboardView()
                 val activity = state.session.getHostActivity()
                 if (state.session.isInPaymentMode() && keyboard?.isAttachedToWindow == true &&
                     (keyboard.isShown || state.session.isAuthenticationInProgress()) &&
                     activity?.isFinishing != true && activity?.isDestroyed != true) {
-                    val event = chain.args[0] as? KeyEvent
-                    if (event != null) {
-                        val keyCode = event.keyCode
-                        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                            ModuleLog.d { "volume key intercepted: $keyCode, triggering toggle" }
-                            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                                state.flow.toggleBetweenBiometricAndKeyboard()
-                            }
-                            return@Hooker true
-                        }
+                    ModuleLog.d { "volume key intercepted: $keyCode, triggering toggle" }
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        state.flow.toggleBetweenBiometricAndKeyboard()
                     }
+                    return@Hooker true
                 }
             } catch (e: Throwable) {
                 ModuleLog.w(e) { "volumeKey interceptor failed" }
