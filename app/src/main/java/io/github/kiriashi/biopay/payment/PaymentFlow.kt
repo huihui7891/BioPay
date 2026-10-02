@@ -37,8 +37,11 @@ class PaymentFlow(private val state: AppRuntime) {
     private var attachedViewRef: WeakReference<ViewGroup>? = null
     private val setupLock = Any()
     private val tasks = MainTasks()
-    fun setupBiometricAuth(keyboardView: ViewGroup, encodedPassword: String,
-                           hostActivity: Activity? = null, startImmediately: Boolean = true): Boolean {
+    fun setupBiometricAuth(
+        keyboardView: ViewGroup, encodedPassword: String,
+        hostActivity: Activity? = null, startImmediately: Boolean = true,
+        usesSystemIme: Boolean = false
+    ): Boolean {
         if (state.isClosed) return false
         val config = state.prefs.activeConfig()?.takeIf { it.encryptedPassword == encodedPassword } ?: return false
         val (sessionId, shouldTrigger) = synchronized(setupLock) {
@@ -47,7 +50,7 @@ class PaymentFlow(private val state: AppRuntime) {
             val id = if (alreadyInProgress) state.session.currentSessionId() else state.session.beginSession()
             removeListenersFromOldView()
 
-            state.session.bindKeyboard(keyboardView, hostActivity ?: keyboardView.context.findActivity(), config)
+            state.session.bindKeyboard(keyboardView, hostActivity ?: keyboardView.context.findActivity(), config, usesSystemIme)
 
             // Visual payment screens are watched by VisualPaymentMonitor. Reattaching
             // their keyboard must not start a second automatic prompt after cancel.

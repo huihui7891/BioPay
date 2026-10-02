@@ -39,6 +39,10 @@ internal object PaymentMasks {
             else -> input
         }
         val flutter = if (app == PaymentApp.WECHAT && password == null) WeChatMask.flutterRegion(keyboard) else null
+        val flutterColorSource = if (flutter != null) {
+            val views = PaymentViewTree(keyboard)
+            views.all.firstOrNull { views.resourceName(it) == "tenpay_keyboard_1" } ?: keyboard
+        } else null
         val windows = linkedMapOf<ViewGroup, MutableList<View>>()
         for (view in listOfNotNull(password, keypad, input, confirm).distinct()) {
             if (!view.isAttachedToWindow || !view.isShown || view.width <= 0 || view.height <= 0) continue
@@ -46,27 +50,26 @@ internal object PaymentMasks {
             if (view !== window) windows.getOrPut(window) { mutableListOf() }.add(view)
         }
         return windows.mapNotNull { (window, controls) ->
-            val tree = PaymentViewTree(window)
-            if (!tree.complete) return@mapNotNull null
             val flybird = app == PaymentApp.ALIPAY || app == PaymentApp.TAOBAO
-            val host = if (flybird) tree.all.firstOrNull {
+            val tree = if (flybird) PaymentViewTree(window) else null
+            if (tree?.complete == false) return@mapNotNull null
+            val host = if (tree != null) tree.all.firstOrNull {
                 it is ViewGroup && tree.resourceName(it) == "flybird_main_layout" &&
                     controls.all { control -> contains(it, control) }
             } as? ViewGroup ?: window else window
-            val field = if (flybird && keypad != null) nearestPassword(tree.all.filter {
-                contains(host, it) && !contains(keypad, it) &&
-                    (tree.resourceName(it) in passwordNames || it.contentDescription?.toString()?.let { label ->
+            val field = if (tree != null && keypad != null) nearestPassword(tree.all.filter {
+                val candidate = tree.resourceName(it) in passwordNames ||
+                    it.contentDescription?.toString()?.let { label ->
                         label.startsWith("密码共6位") || label == "支付密码" || label == "支付密码输入框"
-                    } == true)
+                    } == true
+                candidate && contains(host, it) && !contains(keypad, it)
             }, keypad) else password?.takeIf { it.rootView === window }
             val targets = (listOfNotNull(field) + controls).distinct().filter { contains(host, it) && it !== host }
             if (targets.isEmpty()) return@mapNotNull null
             MaskLayout(
                 host, targets, field, keypad ?: keyboard,
                 app != PaymentApp.QQ,
-                colorSource = if (flutter != null && window === root) tree.all.firstOrNull {
-                    contains(keyboard, it) && tree.resourceName(it) == "tenpay_keyboard_1"
-                } ?: keyboard else null,
+                colorSource = flutterColorSource.takeIf { window === root },
                 extraRegion = flutter.takeIf { window === root }
             )
         }
@@ -92,6 +95,12 @@ internal object PaymentMasks {
         return nearest
     }
 
-    private fun contains(parent: View, child: View): Boolean =
-        generateSequence(child) { it.parent as? View }.any { it === parent }
+    private fun contains(parent: View, child: View): Boolean {
+        var current: View? = child
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? View
+        }
+        return false
+    }
 }

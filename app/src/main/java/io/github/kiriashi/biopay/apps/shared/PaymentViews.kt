@@ -14,6 +14,7 @@ import java.util.IdentityHashMap
 /** One walk over a window, shared by the app-specific recognizers. */
 internal class PaymentViewTree(val root: ViewGroup) {
     private val names = IdentityHashMap<View, String?>()
+    private val resourceNames = HashMap<Int, String?>()
     var complete = true
         private set
     val all: List<View> = buildList {
@@ -57,12 +58,20 @@ internal class PaymentViewTree(val root: ViewGroup) {
 
     fun resourceName(view: View): String? {
         if (names.containsKey(view)) return names[view]
+        val id = view.id
+        if (id == View.NO_ID) return null
+        // Repeated rows often share IDs. Cache only within this window snapshot so
+        // resource changes and module reloads cannot retain stale names.
+        if (view.resources === root.resources && resourceNames.containsKey(id)) {
+            return resourceNames[id].also { names[view] = it }
+        }
         val name = try {
-            if (view.id == View.NO_ID) null else view.resources.getResourceEntryName(view.id)
+            view.resources.getResourceEntryName(id)
         } catch (_: Throwable) {
             null
         }
         names[view] = name
+        if (view.resources === root.resources) resourceNames[id] = name
         return name
     }
 

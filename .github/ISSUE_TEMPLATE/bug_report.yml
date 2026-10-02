@@ -13,7 +13,7 @@ body:
     attributes:
       label: BioPay 版本 / Commit Hash
       description: 你正在使用的 BioPay 版本或 Git Commit Hash 是什么？
-      placeholder: "例如：v2.1.0 或 commit abc1234"
+      placeholder: "例如：v2.1.1 或 commit abc1234"
     validations:
       required: true
 

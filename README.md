@@ -10,7 +10,7 @@
 [![Stars](https://img.shields.io/github/stars/kiriashi/BioPay?style=flat)](https://github.com/kiriashi/BioPay/stargazers)
 [![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkiriashi%2FBioPay%2Fbadges%2Fdownloads.json&style=flat)](https://github.com/kiriashi/BioPay/releases)
 [![License](https://img.shields.io/github/license/kiriashi/BioPay?style=flat)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-9.0%2B-green.svg?style=flat)](https://developer.android.com)
+[![Android](https://img.shields.io/badge/Android-10%2B-green.svg?style=flat)](https://developer.android.com)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20102-purple.svg?style=flat)](https://github.com/LSPosed/LSPosed)
 [![Telegram](https://img.shields.io/badge/Telegram-交流群-blue.svg?style=flat)](https://t.me/biopaychat)
 
@@ -19,7 +19,7 @@
 
 ## 项目简介
 
-**BioPay** 是一个面向 Android 10+、基于 LSPosed 的支付辅助模块。它支持注入微信、支付宝、淘宝、QQ 和云闪付的应用进程，识别到对应的支付密码页面，通过系统标准的 **BiometricPrompt** 接口发起系统生物认证，并在验证成功后解密、自动输入预先保存的六位支付密码。
+**BioPay** 是一个面向 Android 10+、基于 LSPosed 的支付辅助模块。它支持注入微信、支付宝、淘宝、QQ 和云闪付的应用进程，识别到对应的支付窗口后，通过安卓标准的 **BiometricPrompt** 接口发起系统生物认证，并在验证成功后解密、自动无感输入预先保存的六位支付密码。
 > [!WARNING]
 > 部分手机的面容认证硬件仅达到便利级安全标准，被 Android 系统底层限制用于应用级认证，因而暂无法调用。
 
@@ -49,7 +49,7 @@
 ## 日常使用
 
 - **切换验证方式：** 在对应应用的设置页调整指纹和面容开关，按提示验证后保存。已有密码时无需再次输入。
-- **临时手动输入：** 点击取消验证按钮，或使用系统的导航栏按钮/手势返回。
+- **临时手动输入：** 点击取消验证按钮，或使用系统的导航栏按钮/手势进行返回。
 - **重新验证：** 在支付键盘显示时按一次音量键可切换到生物认证页面。
 - **关闭功能：** 在设置页关闭指纹和面容开关后保存，或是直接取消该应用的作用域勾选。
 - **清除密码：** 长按设置页的清除按钮，按提示完成验证后清除。
@@ -73,9 +73,9 @@ flowchart TD
 ## 隐私与安全
 
 - BioPay 只声明一个 **使用生物特征硬件** 权限，不会申请其它网络、剪贴板等任何非必要权限。
-- 模块也不收集、上传支付密码和生物信息，指纹和面容的识别都交由 Android 系统完成。
+- 模块也不主动收集、上传支付密码和生物信息，指纹和面容的识别都交由 Android 系统完成。
 - 支付密码使用 AES-256-GCM 加密保存于本地，密钥由安卓 Keystore 统一管理，硬件保护能力取决于设备。
-- 支付密码不会明文落盘，认证通过后才解密用于输入，使用后自动清理明文缓冲区。
+- 支付密码不会明文落盘，认证通过后才解密用于自动输入，使用后会立即清理明文缓冲区。
 
 ## 反馈与贡献
 
@@ -83,7 +83,7 @@ flowchart TD
 如果遇到 Bug 或有功能建议，欢迎提交 Issue。提交前请按以下步骤操作：
 1. 从 [Releases](https://github.com/kiriashi/BioPay/releases) 下载带 `-Debug` 后缀的 APK，覆盖安装并进行一遍问题复现，测试结束后覆盖安装正式版。
 2. 在对应应用中打开「模块设置 → 异常诊断 → 导出」生成诊断日志，日志不会涉及任何个人敏感信息。
-3. 提交 Issue 时，请附上复现步骤、诊断日志，以及系统版本、支付应用版本与 BioPay 版本。
+3. 进入 Issues 选择**问题报告(Bug Report)**，并附上诊断日志以及相关信息后进行提交。
 
 **代码贡献（PR）**：
 如果您已有不错的改进方案，也欢迎提交 Pull Request！无论是修复 Bug、优化现有逻辑，还是实现新功能。

@@ -25,8 +25,8 @@ android {
         applicationId = "io.github.kiriashi.biopay"
         minSdk = 29
         targetSdk = 35
-        versionCode = 261001
-        versionName = "2.1.0"
+        versionCode = 261002
+        versionName = "2.1.1"
     }
 
     signingConfigs {

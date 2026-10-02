@@ -36,20 +36,24 @@ internal object AlipayTaobaoDetector : PaymentDetector {
         val passwordUi = localPaymentUi || (namedKey1 && hostRoot != null && hostRoot !== root &&
             PaymentViewTree(hostRoot).let { it.complete && hasPaymentUi(it) })
         if (!passwordUi && !(halfScreen && namedKey1)) return null
-        val keys = PaymentKeypad.namedKeys(views, keyPrefixes) ?: PaymentKeypad.textKeys(views)
-        if (keys != null) PaymentKeypad.group(root, keys)?.let { return PaymentScreen(it, digitKeys = keys) }
-
-        // Some verifyidentity and long-password pages use an EditText and OK button
-        // instead of ten Android keypad views. Keep both controls in the same window.
         val input = views.all.firstOrNull {
             it is EditText && views.resourceName(it) == "input_et_password" && it.text.isNullOrEmpty()
         } as? EditText
+        val keys = PaymentKeypad.namedKeys(views, keyPrefixes) ?: PaymentKeypad.textKeys(views)
+        if (keys != null) PaymentKeypad.group(root, keys)?.let {
+            return PaymentScreen(it, passwordInput = input, digitKeys = keys)
+        }
+
+        // Some verifyidentity and long-password pages use an EditText and OK button
+        // instead of ten Android keypad views. Keep both controls in the same window.
         val confirm = views.all.firstOrNull { views.resourceName(it) == "button_ok" }
-        if (input != null && confirm != null) return PaymentScreen(root, input, confirm)
+        if (input != null && confirm != null) {
+            return PaymentScreen(root, input, confirm, usesSystemIme = !namedKey1)
+        }
 
         // Alibaba builds some keypads after the prompt has been requested. Keep
         // early recognition, but resolve the eventual keys in this window only.
-        return if (namedKey1) PaymentScreen(root) else null
+        return if (namedKey1) PaymentScreen(root, passwordInput = input) else null
     }
 
     override fun digitKeys(keyboard: ViewGroup): List<View>? {

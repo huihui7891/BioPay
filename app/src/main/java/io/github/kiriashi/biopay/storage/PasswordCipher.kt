@@ -69,12 +69,15 @@ object PasswordCipher {
     private fun getSecretKey(createIfMissing: Boolean = false): SecretKey {
         synchronized(keyStoreLock) {
             val store = getKeyStore()
-            if (!store.containsAlias(keyAlias)) {
-                if (createIfMissing) return generateKey()
+            val entry = store.getKey(keyAlias, null)
+            if (entry == null) {
+                if (createIfMissing) {
+                    if (store.containsAlias(keyAlias)) throw UnavailableKeyException()
+                    return generateKey()
+                }
                 throw UnrecoverableKeyException("payment encryption key is missing")
             }
-            val key = store.getKey(keyAlias, null) as? SecretKey
-                ?: throw UnavailableKeyException()
+            val key = entry as? SecretKey ?: throw UnavailableKeyException()
             if (key.algorithm != KeyProperties.KEY_ALGORITHM_AES) throw UnavailableKeyException()
             return key
         }

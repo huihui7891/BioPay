@@ -26,6 +26,7 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import io.github.kiriashi.biopay.BuildConfig
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
@@ -67,6 +68,7 @@ object PasswordAutoInput {
                 !keyboardView.isAttachedToWindow || !keyboardView.isShown) return false
             // Authentication takes time. The original payment window may have
             // disappeared or been replaced while the system prompt was open.
+            val started = if (BuildConfig.DEBUG) SystemClock.uptimeMillis() else 0L
             val screen = if (state.adapter is VisualPaymentAdapter) {
                 val activity = state.session.getHostActivity() ?: return false
                 val window = keyboardView.rootView as? ViewGroup ?: return false
@@ -78,6 +80,7 @@ object PasswordAutoInput {
                 }
                     ?: return false
             } else null
+            ModuleLog.d { "payment input recognition: app=${state.adapter.app}, duration=${SystemClock.uptimeMillis() - started}ms" }
             if (state.adapter.app == PaymentApp.QQ) {
                 val input = state.session.getInputEditText()
                 if (input != null && screen?.passwordInput === input &&
@@ -86,6 +89,7 @@ object PasswordAutoInput {
                     input.contentDescription?.toString() in QQ_INPUT_DESCRIPTIONS &&
                     input.text.isNullOrEmpty()
                 ) {
+                    InputMask.show(state)
                     input.setText(String(passwordChars))
                     InputMask.finish()
                     state.session.setInputEditText(null)
@@ -105,6 +109,7 @@ object PasswordAutoInput {
                     runCatching { input.resources.getResourceEntryName(input.id) }.getOrNull() == "input_et_password" &&
                     runCatching { confirm.resources.getResourceEntryName(confirm.id) }.getOrNull() == "button_ok"
                 ) {
+                    InputMask.show(state)
                     val submitted = withoutFeedback(state.adapter.app) {
                         input.setText(String(passwordChars))
                         confirm.isAttachedToWindow && confirm.isShown && confirm.isEnabled &&
@@ -127,6 +132,7 @@ object PasswordAutoInput {
                 WeakReference(key)
             }
             cancelPendingRunnables()
+            InputMask.show(state, digits.filterNotNull())
             val run = InputRun(WeakReference(keyboardView), keys, state, sessionId, config)
             activeRun = run
             run.scheduleNext()

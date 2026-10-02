@@ -10,7 +10,7 @@
 
 ## 同步模块仓库
 
-手动运行 Actions → Sync module repository，填写已发布的源码标签（例如 `v2.1.0`），同步到 `Xposed-Modules-Repo/io.github.kiriashi.biopay`：
+手动运行 Actions → Sync module repository，填写已发布的源码标签（例如 `v2.1.1`），同步到 `Xposed-Modules-Repo/io.github.kiriashi.biopay`：
 
 - 从所选发行标签的 README 自动生成商店 README 和 SUMMARY，并将图片、许可证链接转换为源仓库发行标签的链接。
 - 下载源仓库已发布的 APK，使用 `versionCode-versionName` 标签发布同一文件及更新日志。

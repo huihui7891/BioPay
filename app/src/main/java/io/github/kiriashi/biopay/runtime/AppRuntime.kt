@@ -44,6 +44,7 @@ class AppRuntime private constructor(
     internal val weChatMenu = if (adapter.app == PaymentApp.WECHAT && Application.getProcessName() == app.packageName) WeChatMenu(this) else null
     val flow = PaymentFlow(this)
     val session = PaymentSession(onDestroy = flow::reset)
+    internal val paymentWorker = PaymentWorker(app.mainExecutor)
     private val uiTasks = MainTasks()
     private val dialogs = IdentityHashMap<Activity, DialogHost>()
 
@@ -122,12 +123,12 @@ class AppRuntime private constructor(
     }
 
     private fun shouldInstallEntry(activity: Activity): Boolean {
-        val visualAdapter = adapter as? VisualPaymentAdapter ?: return false
+        if (adapter !is VisualPaymentAdapter) return false
         val name = activity.javaClass.name
         return when (adapter.app) {
-            PaymentApp.ALIPAY -> !visualAdapter.supports(activity)
+            PaymentApp.ALIPAY -> ALIPAY_SETTINGS_ACTIVITIES.any(name::endsWith)
             PaymentApp.TAOBAO -> TAOBAO_SETTINGS_ACTIVITIES.any(name::endsWith)
-            PaymentApp.UNIONPAY -> !visualAdapter.supports(activity) || name.endsWith(".UPActivityReactNative")
+            PaymentApp.UNIONPAY -> name.endsWith(".UPActivityReactNative")
             PaymentApp.QQ, PaymentApp.WECHAT -> false
         }
     }
@@ -137,7 +138,7 @@ class AppRuntime private constructor(
         if (destroyed) {
             dialogs.remove(activity)?.dismiss()
             entryInstaller?.removeActivity(activity)
-        } else if (adapter.app == PaymentApp.TAOBAO) {
+        } else {
             entryInstaller?.stopWatching(activity)
         }
         visualMonitor?.stopActivity(activity, destroyed)
@@ -156,6 +157,7 @@ class AppRuntime private constructor(
     fun close() {
         if (closed) return
         closed = true
+        paymentWorker.close()
         uiTasks.close()
         uiTasks.onMain {
             weChatMenu?.close()
@@ -171,6 +173,9 @@ class AppRuntime private constructor(
     }
 
     companion object {
+        private val ALIPAY_SETTINGS_ACTIVITIES = listOf(
+            ".FBAppWindowActivity", ".UserSettingActivity", ".MySettingActivity"
+        )
         private val TAOBAO_SETTINGS_ACTIVITIES = listOf(
             ".DxSettingCommonActivity"
         )

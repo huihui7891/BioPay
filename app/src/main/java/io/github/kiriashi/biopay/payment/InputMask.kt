@@ -7,9 +7,12 @@ package io.github.kiriashi.biopay.payment
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import io.github.kiriashi.biopay.BuildConfig
 import io.github.kiriashi.biopay.apps.shared.PaymentMasks
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import java.lang.ref.WeakReference
 
@@ -19,14 +22,15 @@ internal object InputMask {
     private val masks = mutableListOf<PaymentMask>()
     private var blockedRoot: WeakReference<View>? = null
 
-    fun show(state: AppRuntime) {
+    fun show(state: AppRuntime, digitKeys: List<View>? = null) {
         reset()
         val keyboard = state.session.getCurrentKeyboardView() ?: return
+        val started = if (BuildConfig.DEBUG) SystemClock.uptimeMillis() else 0L
         val sessionId = state.session.currentSessionId()
         val config = state.session.currentConfig()
         for (layout in PaymentMasks.resolve(
             state.adapter.app, keyboard, state.session.getInputEditText(), state.session.getConfirmButton(),
-            if (keyboard === keyboard.rootView) state.adapter.digitKeys(keyboard)?.filterNotNull() else null
+            digitKeys
         )) {
             val mask = PaymentMask(layout,
                 isCurrent = { !state.isClosed && state.session.isCurrentSession(sessionId) &&
@@ -37,13 +41,19 @@ internal object InputMask {
             masks.add(mask)
             mask.attach()
         }
+        ModuleLog.d { "payment mask: app=${state.adapter.app}, count=${masks.size}, duration=${SystemClock.uptimeMillis() - started}ms" }
     }
 
     fun blocksTouch(root: View, event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            blockedRoot = root.takeIf {
-                masks.toList().any { mask -> mask.blocksTouch(root, event.rawX, event.rawY) }
-            }?.let(::WeakReference)
+            blockedRoot = null
+            // A submitted mask may remove itself while checking the touch.
+            for (index in masks.lastIndex downTo 0) {
+                if (masks[index].blocksTouch(root, event.rawX, event.rawY)) {
+                    blockedRoot = WeakReference(root)
+                    break
+                }
+            }
         }
         val blocked = blockedRoot?.get() === root
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {

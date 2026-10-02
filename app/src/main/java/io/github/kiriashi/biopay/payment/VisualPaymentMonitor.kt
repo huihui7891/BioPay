@@ -25,7 +25,6 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
     private val observers = WeakHashMap<ViewGroup, LayoutObserver>()
     private val screenState = PaymentScreenState<ViewGroup>()
     @Volatile private var closed = false
-    private var screenSeenInScan = false
     private val paymentExitCheck = object : Runnable {
         override fun run() {
             if (closed) return
@@ -57,7 +56,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             val windows = PaymentWindowRoots.attached().ifEmpty {
                 listOfNotNull(activity.window?.decorView as? ViewGroup)
             }
-            screenSeenInScan = false
+            var screenSeenInScan = false
             windows.forEach { root ->
                 val owner = root.context.findActivity()
                 if (owner != null && owner !== activity) return@forEach
@@ -65,7 +64,9 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 watch(root)
                 if (!state.session.isAuthenticationInProgress() &&
                     !PasswordAutoInput.isInProgress(state.session.currentSessionId())
-                ) observers[root]?.inspectNow()
+                ) {
+                    if (observers[root]?.inspectNow() == true) screenSeenInScan = true
+                }
             }
             val sessionId = state.session.currentSessionId()
             val busy = state.session.isAuthenticationInProgress() ||
@@ -214,26 +215,25 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
 
     private fun paymentEnabled(): Boolean = state.prefs.isBioPayEnabled()
 
-    private fun inspect(root: ViewGroup) {
-        if (closed) return
-        if (PasswordAutoInput.isInProgress(state.session.currentSessionId())) return
-        try {
-            val activity = root.context.findActivity() ?: paymentActivity?.get() ?: return
-            if (activity.isFinishing || activity.isDestroyed) return
+    private fun inspect(root: ViewGroup): Boolean {
+        if (closed) return false
+        if (PasswordAutoInput.isInProgress(state.session.currentSessionId())) return false
+        return try {
+            val activity = root.context.findActivity() ?: paymentActivity?.get() ?: return false
+            if (activity.isFinishing || activity.isDestroyed) return false
             val paymentHost = adapter.supports(activity)
             if (!paymentHost) {
                 if (activity.window?.decorView === root) state.installEntry(activity)
-                return
+                return false
             }
-            if (state.session.isAuthenticationInProgress()) return
-            val password = state.prefs.activePassword() ?: return
+            if (state.session.isAuthenticationInProgress()) return false
+            val password = state.prefs.activePassword() ?: return false
             val screen = adapter.observe(root, activity)
             if (screen == null) {
                 if (screenState.keyboard()?.rootView === root && screenState.prompted) schedulePaymentExitCheck()
-                return
+                return false
             }
             tasks.cancel(paymentExitCheck)
-            screenSeenInScan = true
             state.session.setInputEditText(screen.passwordInput)
             state.session.setConfirmButton(screen.confirmButton)
             if (screenState.prompted) {
@@ -244,26 +244,29 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                         current.isShown != true)
                 ) {
                     if (state.flow.setupBiometricAuth(
-                            screen.keyboard, password, activity, startImmediately = false
+                            screen.keyboard, password, activity, startImmediately = false,
+                            usesSystemIme = screen.usesSystemIme
                         )) screenState.rememberKeyboard(screen.keyboard)
                 }
-                return
+                return true
             }
-            if (screenState.keyboard() === screen.keyboard) return
+            if (screenState.keyboard() === screen.keyboard) return true
             if (state.session.isAuthenticationInProgress() ||
                 PasswordAutoInput.isInProgress(state.session.currentSessionId())
-            ) return
+            ) return true
             val now = SystemClock.uptimeMillis()
-            if (!screenState.shouldAttempt(screen.keyboard, now)) return
+            if (!screenState.shouldAttempt(screen.keyboard, now)) return true
             ModuleLog.d { "${adapter.app.displayName}: payment password screen recognized; requesting biometric authentication" }
-            if (state.flow.setupBiometricAuth(screen.keyboard, password, activity)) {
+            if (state.flow.setupBiometricAuth(screen.keyboard, password, activity, usesSystemIme = screen.usesSystemIme)) {
                 screenState.markPrompted(screen.keyboard)
                 ModuleLog.d { "${adapter.app.displayName}: biometric authentication request started" }
             } else {
                 ModuleLog.d { "${adapter.app.displayName}: biometric authentication request was not started" }
             }
+            true
         } catch (e: Throwable) {
             ModuleLog.w(e) { "${adapter.app.displayName} payment view inspection failed" }
+            false
         }
     }
 
@@ -271,24 +274,45 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
         ViewTreeObserver.OnGlobalLayoutListener, View.OnAttachStateChangeListener, Runnable {
         private val rootRef = WeakReference(root)
         private var lastInspection = 0L
+        private var lastScreenSeen = false
         private var pending = false
 
         override fun onGlobalLayout() {
-            if (closed || pending) return
+            if (closed || pending || state.session.isAuthenticationInProgress() ||
+                PasswordAutoInput.isInProgress(state.session.currentSessionId())) return
             pending = true
             // Coalesce rapid layouts while still inspecting the final layout.
-            tasks.post(this, lastInspection + 250L - SystemClock.uptimeMillis())
+            tasks.post(this, lastInspection + INSPECTION_INTERVAL_MS - SystemClock.uptimeMillis())
         }
 
-        override fun run() = inspectNow()
+        override fun run() {
+            inspectNow()
+        }
 
-        fun inspectNow() {
+        fun inspectNow(): Boolean {
+            val root = rootRef.get() ?: return false
+            if (closed || observers[root] !== this || !root.isAttachedToWindow ||
+                !root.isShown || root.windowVisibility != View.VISIBLE) {
+                tasks.cancel(this)
+                pending = false
+                return false
+            }
+            val now = SystemClock.uptimeMillis()
+            val delay = lastInspection + INSPECTION_INTERVAL_MS - now
+            if (lastInspection != 0L && delay > 0L) {
+                if (!pending) {
+                    pending = true
+                    tasks.post(this, delay)
+                }
+                // Window discovery and layout callbacks share the same short
+                // interval. A deferred walk is not evidence that payment ended.
+                return lastScreenSeen
+            }
             tasks.cancel(this)
             pending = false
-            val root = rootRef.get() ?: return
-            if (closed || observers[root] !== this || !root.isAttachedToWindow) return
-            lastInspection = SystemClock.uptimeMillis()
-            inspect(root)
+            lastInspection = now
+            lastScreenSeen = inspect(root)
+            return lastScreenSeen
         }
 
         override fun onViewAttachedToWindow(view: View) = Unit
@@ -308,6 +332,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
     private companion object {
         const val PAYMENT_EXIT_GRACE_MS = 2_500L
         const val INITIAL_SCAN_MS = 5_000L
+        const val INSPECTION_INTERVAL_MS = 250L
     }
 
 }

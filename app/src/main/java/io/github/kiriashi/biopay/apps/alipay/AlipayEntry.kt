@@ -32,18 +32,20 @@ internal object AlipayEntry : SettingsEntry {
 
 internal fun EntryInstaller.installAlipay(activity: Activity, root: ViewGroup): Boolean {
     val name = activity.javaClass.name
-    val version = versionCode(activity)
-    if (name.endsWith(".FBAppWindowActivity") && version >= ALIPAY_NEW_SETTINGS_VERSION) {
-        val title = findText(root, "支付密码", "支付密碼", "Payment Password") ?: return false
-        val target = ancestor(title, 4) as? FrameLayout ?: return false
-        return insertAlipayPaymentSettings(activity, target, title)
-    }
     if (name.endsWith(".UserSettingActivity")) {
         val logout = findByEntryName(root, "logout") ?: return false
         val parent = logout.parent as? LinearLayout ?: return false
         return insertAtTop(activity, parent, "指纹设置", 50, leftPadding = 15)
     }
-    if (!name.endsWith(".MySettingActivity")) return false
+    val flybird = name.endsWith(".FBAppWindowActivity")
+    if (!flybird && !name.endsWith(".MySettingActivity")) return false
+    val version = versionCode(activity)
+    if (flybird) {
+        if (version < ALIPAY_NEW_SETTINGS_VERSION) return false
+        val title = findText(root, "支付密码", "支付密碼", "Payment Password") ?: return false
+        val target = ancestor(title, 4) as? FrameLayout ?: return false
+        return insertAlipayPaymentSettings(activity, target, title)
+    }
     if (version >= ALIPAY_NEW_SETTINGS_VERSION) {
         val title = findText(root, "支付密码", "支付密碼", "Payment Password")
         val target = title?.let { ancestor(it, 4) as? FrameLayout }

@@ -20,15 +20,16 @@
 package io.github.kiriashi.biopay.payment
 
 import android.app.Activity
+import android.content.Context
 import android.os.CancellationSignal
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.storage.PaymentConfig
-import android.content.Context
-import android.view.inputmethod.InputMethodManager
 import java.lang.ref.WeakReference
 
 class PaymentSession(private val onDestroy: () -> Unit = {}) {
@@ -38,6 +39,7 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     private val signalLock = Any()
 
     data class AuthenticationAttempt(val id: Long, val signal: CancellationSignal)
+    private data class InputPolicy(val input: WeakReference<EditText>, val showOnFocus: Boolean)
 
     @Volatile private var cancelSignal: CancellationSignal? = null
     @Volatile private var config: PaymentConfig? = null
@@ -45,6 +47,8 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     @Volatile private var inputEditTextRef: WeakReference<EditText>? = null
     @Volatile private var confirmButtonRef: WeakReference<View>? = null
     @Volatile private var hostActivityRef: WeakReference<Activity>? = null
+    private var inputPolicy: InputPolicy? = null
+    private var usesSystemIme = false
 
     private val cleanupRunnable = object : Runnable {
         override fun run() {
@@ -63,10 +67,13 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         return id
     }
 
-    internal fun bindKeyboard(keyboard: ViewGroup, activity: Activity?, settings: PaymentConfig) {
+    internal fun bindKeyboard(
+        keyboard: ViewGroup, activity: Activity?, settings: PaymentConfig, usesSystemIme: Boolean = false
+    ) {
         currentKeyboardViewRef = WeakReference(keyboard)
         hostActivityRef = activity?.let(::WeakReference)
         config = settings
+        this.usesSystemIme = usesSystemIme
     }
 
     internal fun bindConfig(settings: PaymentConfig) {
@@ -91,7 +98,32 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     fun getCurrentEncodedPassword(): String? = config?.encryptedPassword
 
     fun setInputEditText(editText: EditText?) {
+        if (inputEditTextRef?.get() !== editText) restoreInputPolicy()
         inputEditTextRef = editText?.let(::WeakReference)
+        if (isAuthenticationInProgress()) suppressInputMethod()
+    }
+
+    fun suppressInputMethod() {
+        if (!isAuthenticationInProgress()) return
+        val keyboard = getCurrentKeyboardView() ?: return
+        getInputEditText()?.let { input ->
+            if (!input.isAttachedToWindow || input.rootView !== keyboard.rootView) return@let
+            if (inputPolicy?.input?.get() !== input) {
+                restoreInputPolicy()
+                inputPolicy = InputPolicy(WeakReference(input), input.showSoftInputOnFocus)
+            }
+            input.showSoftInputOnFocus = false
+        }
+        val manager = keyboard.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        manager?.hideSoftInputFromWindow(keyboard.windowToken, 0)
+    }
+
+    private fun restoreInputPolicy() {
+        val policy = inputPolicy ?: return
+        inputPolicy = null
+        policy.input.get()?.let { input ->
+            tasks.onMain { input.showSoftInputOnFocus = policy.showOnFocus }
+        }
     }
 
     fun getInputEditText(): EditText? = inputEditTextRef?.get()
@@ -127,26 +159,49 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
             authenticationToken.invalidate()
             cancelSignal.also { cancelSignal = null }
         }
-        signal?.cancel()
+        try {
+            signal?.cancel()
+        } catch (error: Exception) {
+            ModuleLog.w(error) { "payment authentication cancellation failed" }
+        }
     }
 
     fun restoreKeyboard(id: Long) {
         tasks.onMain {
             if (!isCurrentSession(id) || isAuthenticationInProgress()) return@onMain
-            val keyboard = getCurrentKeyboardView() ?: return@onMain
             InputMask.reset()
+            restoreInputPolicy()
+            val keyboard = getCurrentKeyboardView() ?: return@onMain
             keyboard.visibility = View.VISIBLE
-            val input = getInputEditText()?.takeIf { it.isAttachedToWindow } ?: return@onMain
-            input.requestFocus()
+            val input = getInputEditText() ?: return@onMain
+            val activity = getHostActivity()
+            if (!canRestoreInput(keyboard, input, activity)) return@onMain
+            val needsInputMethod = usesSystemIme && input.showSoftInputOnFocus
+            val showOnFocus = input.showSoftInputOnFocus
+            try {
+                if (!needsInputMethod) input.showSoftInputOnFocus = false
+                input.requestFocus()
+            } finally {
+                input.showSoftInputOnFocus = showOnFocus
+            }
+            if (!needsInputMethod) return@onMain
             tasks.post(Runnable {
                 if (isCurrentSession(id) && !isAuthenticationInProgress() &&
-                    getInputEditText() === input && input.isAttachedToWindow) {
+                    getCurrentKeyboardView() === keyboard && getInputEditText() === input &&
+                    usesSystemIme && input.hasFocus() && input.showSoftInputOnFocus &&
+                    canRestoreInput(keyboard, input, activity)) {
                     val manager = input.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
                     manager?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
                 }
             })
         }
     }
+
+    private fun canRestoreInput(keyboard: ViewGroup, input: EditText, activity: Activity?): Boolean =
+        keyboard.isAttachedToWindow && keyboard.isShown && keyboard.windowVisibility == View.VISIBLE &&
+            input.isAttachedToWindow && input.isShown && input.hasWindowFocus() &&
+            input.rootView === keyboard.rootView && getHostActivity() === activity &&
+            activity?.isFinishing != true && activity?.isDestroyed != true
 
     private fun cleanupExpiredReferences() {
         val keyboard = getCurrentKeyboardView()
@@ -166,6 +221,8 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         sessionToken.invalidate()
         cancelCurrentSignal()
         tasks.clear()
+        restoreInputPolicy()
+        usesSystemIme = false
         if (clearBindings) {
             config = null
             currentKeyboardViewRef = null

@@ -14,7 +14,8 @@ internal data class PaymentScreen(
     val keyboard: ViewGroup,
     val passwordInput: EditText? = null,
     val confirmButton: View? = null,
-    val digitKeys: List<View>? = null
+    val digitKeys: List<View>? = null,
+    val usesSystemIme: Boolean = false
 )
 
 /** An app owns its payment-page evidence and its post-authentication keypad lookup. */
