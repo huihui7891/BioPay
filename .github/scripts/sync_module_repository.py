@@ -104,10 +104,6 @@ def main():
         readme = Path("README.md").read_text(encoding="utf-8")
         readme = readme.replace('src="images/', f'src="https://raw.githubusercontent.com/{source}/{tag}/images/')
         readme = readme.replace("](LICENSE)", f"](https://github.com/{source}/blob/{tag}/LICENSE)")
-        readme = readme.replace(
-            f"](https://github.com/{source}/issues)",
-            f"](https://github.com/{target}/issues)",
-        )
         summary = re.search(r"<p>([^<]+)</p>", readme)
         if summary is None:
             raise ValueError("README header must contain the module summary in a <p> element")
