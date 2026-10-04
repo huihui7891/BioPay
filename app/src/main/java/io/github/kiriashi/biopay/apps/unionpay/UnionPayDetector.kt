@@ -9,6 +9,7 @@ import android.app.Activity
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import io.github.kiriashi.biopay.apps.shared.PaymentDetector
 import io.github.kiriashi.biopay.apps.shared.PaymentKeypad
 import io.github.kiriashi.biopay.apps.shared.PaymentScreen
@@ -30,7 +31,12 @@ internal object UnionPayDetector : PaymentDetector {
         if (views.hasText("设置支付密码", "修改支付密码", "重置支付密码", "Payment password settings")) return null
         if (!views.hasText("请输入支付密码", "請輸入支付密碼", "Input payment password")) return null
         val keys = PaymentKeypad.textKeys(views) ?: return null
-        return PaymentKeypad.group(root, keys)?.let { PaymentScreen(it, digitKeys = keys) }
+        val keyboard = PaymentKeypad.group(root, keys) ?: return null
+        val input = views.all.firstOrNull {
+            it is EditText && views.resourceName(it) == "edit_pay_pwd" &&
+                it.isAttachedToWindow && it.rootView === keyboard.rootView
+        } as? EditText
+        return PaymentScreen(keyboard, passwordInput = input, digitKeys = keys)
     }
 
     /** Native wallet pages name their custom field; React Native uses five dividers. */

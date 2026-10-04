@@ -39,11 +39,11 @@
 
 **需要：** Android 10+ 版本、支持 LibXposed API 102 的 LSPosed，以及设备上已录入指纹或面容。
 
-1. 从 [Releases](https://github.com/kiriashi/BioPay/releases)或 **模块仓库** 下载并安装 APK。
+1. 从 [Releases](https://github.com/Xposed-Modules-Repo/io.github.kiriashi.biopay/releases)或 **模块仓库** 下载并安装 APK。
 2. 在 LSPosed 中启用 BioPay，勾选需要使用的支付应用作用域。
-3. 强制停止选中的应用，再重新打开。
+3. 在手机设置里强制停止对应的应用，再重新打开。
 4. 按上表进入相应应用的 BioPay 设置页。
-5. 按需选择验证方式并设置支付密码，按提示完成系统验证并保存。
+5. 按需选择验证方式并设置支付密码，根据提示完成系统验证并保存。
 6. 下次付款时，按系统提示验证即可。
 
 ## 日常使用

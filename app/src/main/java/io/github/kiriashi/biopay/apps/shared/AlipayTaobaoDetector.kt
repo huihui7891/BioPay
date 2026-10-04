@@ -48,7 +48,12 @@ internal object AlipayTaobaoDetector : PaymentDetector {
         // instead of ten Android keypad views. Keep both controls in the same window.
         val confirm = views.all.firstOrNull { views.resourceName(it) == "button_ok" }
         if (input != null && confirm != null) {
-            return PaymentScreen(root, input, confirm, usesSystemIme = !namedKey1)
+            val mode = when {
+                namedKey1 -> KeyboardMode.APP
+                views.hasText("请输入长密码", "請輸入長密碼") -> KeyboardMode.SYSTEM
+                else -> KeyboardMode.UNKNOWN
+            }
+            return PaymentScreen(root, input, confirm, keyboardMode = mode)
         }
 
         // Alibaba builds some keypads after the prompt has been requested. Keep

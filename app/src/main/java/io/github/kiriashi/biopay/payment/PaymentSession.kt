@@ -1,31 +1,18 @@
 /*
  * BioPay - biometric payment assistance for supported payment apps.
- *
  * Copyright (C) 2026 kiriashi
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 package io.github.kiriashi.biopay.payment
 
 import android.app.Activity
-import android.content.Context
 import android.os.CancellationSignal
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import io.github.kiriashi.biopay.apps.shared.KeyboardMode
 import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
@@ -36,10 +23,10 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     private val sessionToken = SessionToken()
     private val authenticationToken = SessionToken()
     private val tasks = MainTasks()
+    private val ime = PaymentIme()
     private val signalLock = Any()
 
     data class AuthenticationAttempt(val id: Long, val signal: CancellationSignal)
-    private data class InputPolicy(val input: WeakReference<EditText>, val showOnFocus: Boolean)
 
     @Volatile private var cancelSignal: CancellationSignal? = null
     @Volatile private var config: PaymentConfig? = null
@@ -47,8 +34,10 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     @Volatile private var inputEditTextRef: WeakReference<EditText>? = null
     @Volatile private var confirmButtonRef: WeakReference<View>? = null
     @Volatile private var hostActivityRef: WeakReference<Activity>? = null
-    private var inputPolicy: InputPolicy? = null
-    private var usesSystemIme = false
+    @Volatile private var keyboardMode = KeyboardMode.UNKNOWN
+    @Volatile private var inputHandoff = false
+    private var authenticationCleanup: (() -> Unit)? = null
+    @Volatile private var manualImeRestore: Runnable? = null
 
     private val cleanupRunnable = object : Runnable {
         override fun run() {
@@ -68,12 +57,13 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     }
 
     internal fun bindKeyboard(
-        keyboard: ViewGroup, activity: Activity?, settings: PaymentConfig, usesSystemIme: Boolean = false
+        keyboard: ViewGroup, activity: Activity?, settings: PaymentConfig, keyboardMode: KeyboardMode = KeyboardMode.APP
     ) {
         currentKeyboardViewRef = WeakReference(keyboard)
         hostActivityRef = activity?.let(::WeakReference)
         config = settings
-        this.usesSystemIme = usesSystemIme
+        applyKeyboardMode(keyboardMode)
+        updateInputMethod()
     }
 
     internal fun bindConfig(settings: PaymentConfig) {
@@ -98,38 +88,45 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     fun getCurrentEncodedPassword(): String? = config?.encryptedPassword
 
     fun setInputEditText(editText: EditText?) {
-        if (inputEditTextRef?.get() !== editText) restoreInputPolicy()
-        inputEditTextRef = editText?.let(::WeakReference)
-        if (isAuthenticationInProgress()) suppressInputMethod()
+        if (editText == null || inputEditTextRef?.get() !== editText) inputEditTextRef = editText?.let(::WeakReference)
+        updateInputMethod()
     }
 
     fun suppressInputMethod() {
         if (!isAuthenticationInProgress()) return
-        val keyboard = getCurrentKeyboardView() ?: return
-        getInputEditText()?.let { input ->
-            if (!input.isAttachedToWindow || input.rootView !== keyboard.rootView) return@let
-            if (inputPolicy?.input?.get() !== input) {
-                restoreInputPolicy()
-                inputPolicy = InputPolicy(WeakReference(input), input.showSoftInputOnFocus)
-            }
-            input.showSoftInputOnFocus = false
-        }
-        val manager = keyboard.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-        manager?.hideSoftInputFromWindow(keyboard.windowToken, 0)
+        manualImeRestore?.let(tasks::cancel)
+        manualImeRestore = null
+        updateInputMethod(force = true)
     }
 
-    private fun restoreInputPolicy() {
-        val policy = inputPolicy ?: return
-        inputPolicy = null
-        policy.input.get()?.let { input ->
-            tasks.onMain { input.showSoftInputOnFocus = policy.showOnFocus }
-        }
+    internal fun updateKeyboardMode(mode: KeyboardMode) {
+        if (applyKeyboardMode(mode)) updateInputMethod()
+    }
+
+    private fun applyKeyboardMode(mode: KeyboardMode): Boolean {
+        // Partial layouts do not change an established mode; SYSTEM requires explicit page evidence.
+        if (mode == KeyboardMode.UNKNOWN || keyboardMode == mode) return false
+        ModuleLog.d { "payment keyboard mode: $keyboardMode -> $mode, session=${currentSessionId()}" }
+        keyboardMode = mode
+        return true
+    }
+
+    internal fun holdInputMethodForInput() {
+        inputHandoff = true
+        updateInputMethod()
+    }
+
+    private fun updateInputMethod(force: Boolean = false) {
+        val authenticating = isAuthenticationInProgress()
+        ime.update(getCurrentKeyboardView(), getInputEditText(),
+            isInPaymentMode() && (authenticating || inputHandoff || keyboardMode != KeyboardMode.SYSTEM),
+            authenticating, force)
     }
 
     fun getInputEditText(): EditText? = inputEditTextRef?.get()
 
     fun setConfirmButton(button: View?) {
-        confirmButtonRef = button?.let(::WeakReference)
+        if (button == null || confirmButtonRef?.get() !== button) confirmButtonRef = button?.let(::WeakReference)
     }
 
     fun getConfirmButton(): View? = confirmButtonRef?.get()
@@ -143,10 +140,20 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         AuthenticationAttempt(authenticationToken.begin(), signal)
     }
 
-    fun finishAuthentication(id: Long): Boolean = synchronized(signalLock) {
-        if (!authenticationToken.finish(id)) return false
-        cancelSignal = null
+    internal fun onAuthenticationEnded(id: Long, cleanup: () -> Unit): Boolean = synchronized(signalLock) {
+        if (!authenticationToken.isCurrent(id) || authenticationCleanup != null) return false
+        authenticationCleanup = cleanup
         true
+    }
+
+    fun finishAuthentication(id: Long): Boolean {
+        val cleanup = synchronized(signalLock) {
+            if (!authenticationToken.finish(id)) return false
+            cancelSignal = null
+            authenticationCleanup.also { authenticationCleanup = null }
+        }
+        runAuthenticationCleanup(cleanup)
+        return true
     }
 
     fun cancelAuthentication() {
@@ -155,10 +162,16 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
     }
 
     private fun cancelCurrentSignal() {
-        val signal = synchronized(signalLock) {
+        val (signal, cleanup) = synchronized(signalLock) {
             authenticationToken.invalidate()
-            cancelSignal.also { cancelSignal = null }
+            val signal = cancelSignal
+            val cleanup = authenticationCleanup
+            cancelSignal = null
+            authenticationCleanup = null
+            signal to cleanup
         }
+        // Release attempt resources before framework cancellation can deliver callbacks.
+        runAuthenticationCleanup(cleanup)
         try {
             signal?.cancel()
         } catch (error: Exception) {
@@ -166,40 +179,66 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         }
     }
 
+    private fun runAuthenticationCleanup(cleanup: (() -> Unit)?) {
+        try {
+            cleanup?.invoke()
+        } catch (error: Exception) {
+            ModuleLog.w(error) { "payment authentication cleanup failed" }
+        }
+    }
+
     fun restoreKeyboard(id: Long) {
         tasks.onMain {
             if (!isCurrentSession(id) || isAuthenticationInProgress()) return@onMain
+            manualImeRestore?.let(tasks::cancel)
+            manualImeRestore = null
             InputMask.reset()
-            restoreInputPolicy()
+            inputHandoff = false
+            updateInputMethod(force = keyboardMode != KeyboardMode.SYSTEM)
             val keyboard = getCurrentKeyboardView() ?: return@onMain
             keyboard.visibility = View.VISIBLE
             val input = getInputEditText() ?: return@onMain
             val activity = getHostActivity()
             if (!canRestoreInput(keyboard, input, activity)) return@onMain
-            val needsInputMethod = usesSystemIme && input.showSoftInputOnFocus
-            val showOnFocus = input.showSoftInputOnFocus
-            try {
-                if (!needsInputMethod) input.showSoftInputOnFocus = false
-                input.requestFocus()
-            } finally {
-                input.showSoftInputOnFocus = showOnFocus
-            }
+            val needsInputMethod = keyboardMode == KeyboardMode.SYSTEM && input.showSoftInputOnFocus
+            input.requestFocus()
             if (!needsInputMethod) return@onMain
-            tasks.post(Runnable {
-                if (isCurrentSession(id) && !isAuthenticationInProgress() &&
-                    getCurrentKeyboardView() === keyboard && getInputEditText() === input &&
-                    usesSystemIme && input.hasFocus() && input.showSoftInputOnFocus &&
-                    canRestoreInput(keyboard, input, activity)) {
-                    val manager = input.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    manager?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            val root = keyboard.rootView
+            val settings = currentConfig()
+            val deadline = SystemClock.uptimeMillis() + MANUAL_IME_TIMEOUT_MS
+            val restore = object : Runnable {
+                override fun run() {
+                    if (manualImeRestore !== this) return
+                    if (!isCurrentSession(id) || isAuthenticationInProgress() || inputHandoff ||
+                        getCurrentKeyboardView() !== keyboard || getInputEditText() !== input ||
+                        keyboard.rootView !== root || currentConfig() != settings ||
+                        keyboardMode != KeyboardMode.SYSTEM || !input.showSoftInputOnFocus ||
+                        !canRestoreInput(keyboard, input, activity)) {
+                        manualImeRestore = null
+                        return
+                    }
+                    if (!input.hasFocus() || !input.hasWindowFocus()) {
+                        if (SystemClock.uptimeMillis() < deadline) {
+                            tasks.post(this, MANUAL_IME_RETRY_MS)
+                        } else {
+                            manualImeRestore = null
+                            ModuleLog.d { "payment manual IME restoration skipped: window focus unavailable, session=$id" }
+                        }
+                        return
+                    }
+                    manualImeRestore = null
+                    ModuleLog.d { "payment manual IME show requested, session=$id" }
+                    ime.show(input)
                 }
-            })
+            }
+            manualImeRestore = restore
+            tasks.post(restore)
         }
     }
 
     private fun canRestoreInput(keyboard: ViewGroup, input: EditText, activity: Activity?): Boolean =
         keyboard.isAttachedToWindow && keyboard.isShown && keyboard.windowVisibility == View.VISIBLE &&
-            input.isAttachedToWindow && input.isShown && input.hasWindowFocus() &&
+            input.isAttachedToWindow && input.isShown &&
             input.rootView === keyboard.rootView && getHostActivity() === activity &&
             activity?.isFinishing != true && activity?.isDestroyed != true
 
@@ -221,8 +260,10 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
         sessionToken.invalidate()
         cancelCurrentSignal()
         tasks.clear()
-        restoreInputPolicy()
-        usesSystemIme = false
+        manualImeRestore = null
+        ime.clear()
+        keyboardMode = KeyboardMode.UNKNOWN
+        inputHandoff = false
         if (clearBindings) {
             config = null
             currentKeyboardViewRef = null
@@ -236,5 +277,7 @@ class PaymentSession(private val onDestroy: () -> Unit = {}) {
 
     private companion object {
         const val CLEANUP_INTERVAL_MS = 60_000L
+        const val MANUAL_IME_TIMEOUT_MS = 1_000L
+        const val MANUAL_IME_RETRY_MS = 50L
     }
 }

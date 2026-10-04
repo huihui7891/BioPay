@@ -1,20 +1,7 @@
 /*
  * BioPay - biometric payment assistance for supported payment apps.
- *
  * Copyright (C) 2026 kiriashi
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 package io.github.kiriashi.biopay.biometric
 
@@ -25,11 +12,13 @@ import android.view.View
 import android.view.ViewGroup
 import io.github.kiriashi.biopay.BuildConfig
 import io.github.kiriashi.biopay.core.log.ModuleLog
+import io.github.kiriashi.biopay.core.util.MainTasks
 import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.payment.PasswordAutoInput
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import io.github.kiriashi.biopay.storage.PasswordCipher
 import io.github.kiriashi.biopay.storage.PaymentConfig
+import java.lang.ref.WeakReference
 
 object BiometricAuth {
     fun triggerBiometricAuth(
@@ -71,9 +60,16 @@ object BiometricAuth {
                 discard = { it?.ciphertext?.fill(0) }
             ) { result ->
                 val operation = result.getOrNull()
-                if (!isCurrent(state, config, sessionId, attempt.id, keyboardView, activity) ||
-                    !keyboardView.isShown) {
-                    ModuleLog.d { "authentication preparation discarded: app=${state.adapter.app}, session=$sessionId, attempt=${attempt.id}" }
+                val preparationFailure = currentFailure(state, config, sessionId, attempt.id, activity)
+                    ?: when {
+                        state.session.getCurrentKeyboardView() !== keyboardView -> "keyboard replaced"
+                        !keyboardView.isAttachedToWindow -> "keyboard detached"
+                        keyboardView.windowVisibility != View.VISIBLE || !keyboardView.isShown -> "keyboard hidden"
+                        keyboardView.rootView.context.findActivity()?.let { it !== activity } == true -> "window owner changed"
+                        else -> null
+                    }
+                if (preparationFailure != null) {
+                    ModuleLog.d { "authentication preparation discarded: reason=$preparationFailure, app=${state.adapter.app}, session=$sessionId, attempt=${attempt.id}" }
                     operation?.ciphertext?.fill(0)
                     restoreKeyboard(state, sessionId, attempt.id)
                     return@submit
@@ -84,8 +80,13 @@ object BiometricAuth {
                     return@submit
                 }
                 val callback = BiometricAuthCallback(
-                    activity, operation, config, state, sessionId, attempt.id
+                    activity, keyboardView, operation, config, state, sessionId, attempt.id
                 )
+                if (!state.session.onAuthenticationEnded(attempt.id, callback::dispose)) {
+                    callback.dispose()
+                    restoreKeyboard(state, sessionId, attempt.id)
+                    return@submit
+                }
                 try {
                     val executor = activity.mainExecutor
                     val builder = BiometricPrompt.Builder(activity)
@@ -119,18 +120,20 @@ object BiometricAuth {
         }
     }
 
-    private fun isCurrent(
+    private fun currentFailure(
         state: AppRuntime, config: PaymentConfig, sessionId: Long, attemptId: Long,
-        keyboard: ViewGroup, activity: Activity
-    ): Boolean = !state.isClosed && state.session.isCurrentSession(sessionId) &&
-        state.session.isCurrentAuthentication(attemptId) &&
-        state.session.currentConfig() == config && state.prefs.isCurrent(config) &&
-        state.session.getCurrentKeyboardView() === keyboard &&
-        state.session.getHostActivity() === activity &&
+        activity: Activity
+    ): String? = when {
+        state.isClosed -> "runtime closed"
+        !state.session.isCurrentSession(sessionId) -> "payment session expired"
+        !state.session.isCurrentAuthentication(attemptId) -> "authentication expired"
+        state.session.currentConfig() != config || !state.prefs.isCurrent(config) -> "settings changed"
+        state.session.getHostActivity() !== activity -> "payment host changed"
+        activity.isFinishing || activity.isDestroyed -> "payment host closed"
         // Plugin hosts may expose a separate Application instance for the same package.
-        !activity.isFinishing && !activity.isDestroyed && activity.packageName == state.app.packageName &&
-        keyboard.isAttachedToWindow && keyboard.windowVisibility == View.VISIBLE &&
-        keyboard.rootView.context.findActivity()?.let { it === activity } != false
+        activity.packageName != state.app.packageName -> "payment owner changed"
+        else -> null
+    }
 
     private fun restoreKeyboard(state: AppRuntime, sessionId: Long, attemptId: Long) {
         if (state.session.isCurrentSession(sessionId) && state.session.finishAuthentication(attemptId)) {
@@ -140,87 +143,187 @@ object BiometricAuth {
 
     private class BiometricAuthCallback(
         private val activity: Activity,
+        keyboard: ViewGroup,
         operation: PasswordCipher.DecryptOperation,
         private val config: PaymentConfig,
         private val state: AppRuntime,
         private val sessionId: Long,
         private val attemptId: Long
     ) : BiometricPrompt.AuthenticationCallback() {
+        private val window = WeakReference(keyboard.rootView as? ViewGroup)
+        private val tasks = MainTasks()
+        private val startedAt = SystemClock.uptimeMillis()
         private var operation: PasswordCipher.DecryptOperation? = operation
+        private var password: CharArray? = null
+        @Volatile private var ended = false
+        private var authenticated = false
         private var decrypting = false
+        private var deadline = 0L
+        private var lastWaitReason: String? = null
+        private val retry = Runnable { continueInput() }
+
+        fun dispose() {
+            ended = true
+            tasks.close()
+            tasks.onMain {
+                operation?.ciphertext?.fill(0)
+                operation = null
+                password?.fill('\u0000')
+                password = null
+            }
+        }
 
         fun cancel() {
-            if (decrypting) return
-            operation?.ciphertext?.fill(0)
-            operation = null
-            restoreKeyboard(state, sessionId, attemptId)
+            if (authenticated || ended) return
+            stop("authentication cancelled")
         }
 
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-            if (decrypting) return
-            cancel()
+            if (authenticated || ended) return
+            stop("authentication error")
             ModuleLog.d { "onAuthError: code=$errorCode, attempt=$attemptId" }
         }
 
         override fun onAuthenticationFailed() {
-            if (state.session.isCurrentSession(sessionId) && state.session.isCurrentAuthentication(attemptId)) {
+            if (!ended && state.session.isCurrentSession(sessionId) && state.session.isCurrentAuthentication(attemptId)) {
                 ModuleLog.d { "onAuthFailed: attempt=$attemptId" }
             }
         }
 
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
-            val keyboard = state.session.getCurrentKeyboardView()
-            if (keyboard == null || !isCurrent(state, config, sessionId, attemptId, keyboard, activity)) {
-                cancel()
+            ModuleLog.d { "onAuthSucceeded received: attempt=$attemptId, elapsed=${SystemClock.uptimeMillis() - startedAt}ms" }
+            if (authenticated || ended) return
+            currentFailure(state, config, sessionId, attemptId, activity)?.let {
+                stop(it)
                 return
             }
-            val pending = operation ?: return
+            if (operation == null) {
+                stop("decryption operation unavailable")
+                return
+            }
+            authenticated = true
+            state.session.holdInputMethodForInput()
+            deadline = SystemClock.uptimeMillis() + INPUT_READY_TIMEOUT_MS
+            continueInput()
+        }
+
+        private fun continueInput() {
+            if (ended || decrypting) return
+            try {
+                currentFailure(state, config, sessionId, attemptId, activity)?.let {
+                    stop(it)
+                    return
+                }
+                val root = window.get() ?: run { stop("payment window released"); return }
+                if (root.context.findActivity()?.let { it !== activity } == true) {
+                    stop("payment window owner changed")
+                    return
+                }
+                val keyboard = state.session.getCurrentKeyboardView()
+                if (keyboard == null || !keyboard.isAttachedToWindow || !root.isAttachedToWindow) {
+                    waitForInput("keyboard not attached")
+                    return
+                }
+                // Authentication authorizes only the original payment window, even if its keypad is rebuilt.
+                if (keyboard.rootView !== root) {
+                    stop("payment window replaced")
+                    return
+                }
+                keyboard.visibility = View.VISIBLE
+                // Non-focusable keypad popups use the Activity window's focus.
+                val hostWindow = activity.window?.decorView
+                val hasFocus = root.hasWindowFocus() ||
+                    (hostWindow?.isAttachedToWindow == true && hostWindow.hasWindowFocus())
+                if (root.windowVisibility != View.VISIBLE || !hasFocus || !keyboard.isShown) {
+                    waitForInput("payment window not ready")
+                    return
+                }
+                when (val preparation = PasswordAutoInput.prepareInput(keyboard, state)) {
+                    is PasswordAutoInput.Preparation.Waiting -> waitForInput(preparation.reason)
+                    is PasswordAutoInput.Preparation.Rejected -> stop(preparation.reason)
+                    is PasswordAutoInput.Preparation.Ready -> {
+                        preparation.input.keyboardMode?.let(state.session::updateKeyboardMode)
+                        if (password == null) decrypt() else enterPassword(keyboard, preparation.input)
+                    }
+                }
+            } catch (error: Exception) {
+                ModuleLog.w(error) { "post-authentication input preparation failed" }
+                stop("input preparation failed")
+            }
+        }
+
+        private fun waitForInput(reason: String) {
+            val remaining = deadline - SystemClock.uptimeMillis()
+            if (remaining <= 0L) {
+                ModuleLog.w { "payment input readiness timed out: app=${state.adapter.app}, reason=$reason" }
+                stop("input readiness timeout")
+                return
+            }
+            if (reason != lastWaitReason) {
+                lastWaitReason = reason
+                ModuleLog.d { "payment input waiting: app=${state.adapter.app}, attempt=$attemptId, reason=$reason" }
+            }
+            tasks.post(retry, minOf(INPUT_READY_RETRY_MS, remaining))
+        }
+
+        private fun decrypt() {
+            val pending = operation ?: run { stop("decryption operation unavailable"); return }
             operation = null
             decrypting = true
-            ModuleLog.d { "onAuthSucceeded: attempt=$attemptId" }
-            // The authentication attempt remains active until decryption completes.
-            // Layout callbacks and volume keys cannot start another prompt in between.
             val submitted = state.paymentWorker.submit(
                 work = {
-                    if (!state.isClosed && state.session.isCurrentSession(sessionId) &&
-                        state.session.isCurrentAuthentication(attemptId)) {
+                    if (!ended && currentFailure(state, config, sessionId, attemptId, activity) == null) {
                         measureCrypto("decrypt") { PasswordCipher.decryptToCharArray(pending) }
                     } else null
                 },
                 cleanup = { pending.ciphertext.fill(0) },
                 discard = { it?.fill('\u0000') }
-            ) { result -> finishInput(result) }
-            if (!submitted) restoreKeyboard(state, sessionId, attemptId)
+            ) { result ->
+                decrypting = false
+                val decrypted = result.getOrNull()
+                if (ended) {
+                    decrypted?.fill('\u0000')
+                    return@submit
+                }
+                if (decrypted == null) {
+                    result.exceptionOrNull()?.let { ModuleLog.w(it) { "password decryption failed" } }
+                    stop("password decryption unavailable")
+                    return@submit
+                }
+                password = decrypted
+                continueInput()
+            }
+            if (!submitted) stop("payment worker unavailable")
         }
 
-        private fun finishInput(result: Result<CharArray?>) {
-            val password = result.getOrNull()
+        private fun enterPassword(keyboard: ViewGroup, input: PasswordAutoInput.PreparedInput) {
+            val plaintext = password ?: return
+            // Hand ownership to the input path before finishAuthentication invokes attempt cleanup.
+            password = null
             try {
-                // WeChat may replace its keyboard while the prompt is open. Only
-                // the live binding for this session and Activity may receive input.
-                val keyboard = state.session.getCurrentKeyboardView()
-                if (keyboard == null || !isCurrent(state, config, sessionId, attemptId, keyboard, activity)) {
-                    restoreKeyboard(state, sessionId, attemptId)
+                if (!state.session.finishAuthentication(attemptId)) {
+                    dispose()
                     return
                 }
-                if (password == null) {
-                    result.exceptionOrNull()?.let { ModuleLog.w(it) { "password decryption failed" } }
-                    restoreKeyboard(state, sessionId, attemptId)
-                    return
-                }
-                if (!state.session.finishAuthentication(attemptId)) return
-                keyboard.visibility = View.VISIBLE
-                PasswordAutoInput.cancelPendingRunnables()
-                if (!PasswordAutoInput.autoInputPassword(keyboard, password, state, sessionId, config)) {
+                ModuleLog.d { "payment input ready: app=${state.adapter.app}, attempt=$attemptId, elapsed=${SystemClock.uptimeMillis() - startedAt}ms" }
+                if (!PasswordAutoInput.autoInputPassword(keyboard, plaintext, state, sessionId, config, input)) {
                     state.session.restoreKeyboard(sessionId)
                 }
-            } catch (e: Throwable) {
-                ModuleLog.w(e) { "post-authentication input failed" }
-                state.session.finishAuthentication(attemptId)
+            } catch (error: Exception) {
+                ModuleLog.w(error) { "post-authentication input failed" }
                 state.session.restoreKeyboard(sessionId)
             } finally {
-                password?.fill('\u0000')
+                plaintext.fill('\u0000')
             }
         }
+
+        private fun stop(reason: String) {
+            ModuleLog.d { "payment authentication ended: app=${state.adapter.app}, attempt=$attemptId, reason=$reason" }
+            dispose()
+            restoreKeyboard(state, sessionId, attemptId)
+        }
     }
+
+    private const val INPUT_READY_TIMEOUT_MS = 2_000L
+    private const val INPUT_READY_RETRY_MS = 50L
 }

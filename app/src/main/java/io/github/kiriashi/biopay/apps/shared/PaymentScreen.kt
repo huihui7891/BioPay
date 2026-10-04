@@ -10,12 +10,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 
+enum class KeyboardMode { UNKNOWN, APP, SYSTEM }
+
 internal data class PaymentScreen(
     val keyboard: ViewGroup,
     val passwordInput: EditText? = null,
     val confirmButton: View? = null,
     val digitKeys: List<View>? = null,
-    val usesSystemIme: Boolean = false
+    val keyboardMode: KeyboardMode = KeyboardMode.APP
 )
 
 /** An app owns its payment-page evidence and its post-authentication keypad lookup. */

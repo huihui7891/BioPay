@@ -51,6 +51,11 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 clearPaymentScreen()
                 return
             }
+            if (isBusy()) {
+                screenState.screenAbsentTooLong(false, true, state.session.isInPaymentMode(), SystemClock.uptimeMillis())
+                if (SystemClock.uptimeMillis() < scanUntil) tasks.post(this, 350L)
+                return
+            }
             // Catch windows created during the first few layout frames. Later
             // windows arrive through Dialog.show or WindowManager.addView.
             val windows = PaymentWindowRoots.attached().ifEmpty {
@@ -62,17 +67,12 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 if (owner != null && owner !== activity) return@forEach
                 if (owner == null && root.context.packageName != state.app.packageName) return@forEach
                 watch(root)
-                if (!state.session.isAuthenticationInProgress() &&
-                    !PasswordAutoInput.isInProgress(state.session.currentSessionId())
-                ) {
+                if (!isBusy()) {
                     if (observers[root]?.inspectNow() == true) screenSeenInScan = true
                 }
             }
-            val sessionId = state.session.currentSessionId()
-            val busy = state.session.isAuthenticationInProgress() ||
-                PasswordAutoInput.isInProgress(sessionId)
             if (screenState.screenAbsentTooLong(
-                    screenSeenInScan, busy, state.session.isInPaymentMode(), SystemClock.uptimeMillis()
+                    screenSeenInScan, isBusy(), state.session.isInPaymentMode(), SystemClock.uptimeMillis()
                 )) {
                 clearPaymentScreen()
             }
@@ -215,6 +215,9 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
 
     private fun paymentEnabled(): Boolean = state.prefs.isBioPayEnabled()
 
+    private fun isBusy(): Boolean = state.session.isAuthenticationInProgress() ||
+        PasswordAutoInput.isInProgress(state.session.currentSessionId())
+
     private fun inspect(root: ViewGroup): Boolean {
         if (closed) return false
         if (PasswordAutoInput.isInProgress(state.session.currentSessionId())) return false
@@ -238,6 +241,9 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             state.session.setConfirmButton(screen.confirmButton)
             if (screenState.prompted) {
                 val current = state.session.getCurrentKeyboardView()
+                if (current?.rootView === screen.keyboard.rootView) {
+                    state.session.updateKeyboardMode(screen.keyboardMode)
+                }
                 if (!state.session.isAuthenticationInProgress() &&
                     !PasswordAutoInput.isInProgress(state.session.currentSessionId()) &&
                     (!state.session.isInPaymentMode() || current?.isAttachedToWindow != true ||
@@ -245,7 +251,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 ) {
                     if (state.flow.setupBiometricAuth(
                             screen.keyboard, password, activity, startImmediately = false,
-                            usesSystemIme = screen.usesSystemIme
+                            keyboardMode = screen.keyboardMode
                         )) screenState.rememberKeyboard(screen.keyboard)
                 }
                 return true
@@ -257,7 +263,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
             val now = SystemClock.uptimeMillis()
             if (!screenState.shouldAttempt(screen.keyboard, now)) return true
             ModuleLog.d { "${adapter.app.displayName}: payment password screen recognized; requesting biometric authentication" }
-            if (state.flow.setupBiometricAuth(screen.keyboard, password, activity, usesSystemIme = screen.usesSystemIme)) {
+            if (state.flow.setupBiometricAuth(screen.keyboard, password, activity, keyboardMode = screen.keyboardMode)) {
                 screenState.markPrompted(screen.keyboard)
                 ModuleLog.d { "${adapter.app.displayName}: biometric authentication request started" }
             } else {
@@ -286,6 +292,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
         }
 
         override fun run() {
+            pending = false
             inspectNow()
         }
 
@@ -296,6 +303,11 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 tasks.cancel(this)
                 pending = false
                 return false
+            }
+            if (isBusy()) {
+                if (pending) tasks.cancel(this)
+                pending = false
+                return lastScreenSeen
             }
             val now = SystemClock.uptimeMillis()
             val delay = lastInspection + INSPECTION_INTERVAL_MS - now
@@ -308,7 +320,7 @@ class VisualPaymentMonitor(private val state: AppRuntime, private val adapter: V
                 // interval. A deferred walk is not evidence that payment ended.
                 return lastScreenSeen
             }
-            tasks.cancel(this)
+            if (pending) tasks.cancel(this)
             pending = false
             lastInspection = now
             lastScreenSeen = inspect(root)

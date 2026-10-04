@@ -1,46 +1,33 @@
 /*
  * BioPay - biometric payment assistance for supported payment apps.
- *
  * Copyright (C) 2026 kiriashi
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 package io.github.kiriashi.biopay.payment
-
-import io.github.kiriashi.biopay.core.log.ModuleLog
-import io.github.kiriashi.biopay.apps.PaymentApp
-import io.github.kiriashi.biopay.biometric.BiometricAuth
 
 import android.app.Activity
 import android.view.View
 import android.view.ViewGroup
-import io.github.kiriashi.biopay.core.util.findActivity
+import io.github.kiriashi.biopay.apps.PaymentApp
+import io.github.kiriashi.biopay.apps.shared.KeyboardMode
+import io.github.kiriashi.biopay.biometric.BiometricAuth
+import io.github.kiriashi.biopay.core.log.ModuleLog
 import io.github.kiriashi.biopay.core.util.MainTasks
+import io.github.kiriashi.biopay.core.util.findActivity
 import io.github.kiriashi.biopay.runtime.AppRuntime
 import java.lang.ref.WeakReference
 
 class PaymentFlow(private val state: AppRuntime) {
-
     private val attachLock = Any()
     private var attachListener: KeyboardAttachListener? = null
     private var attachedViewRef: WeakReference<ViewGroup>? = null
     private val setupLock = Any()
     private val tasks = MainTasks()
+
     fun setupBiometricAuth(
         keyboardView: ViewGroup, encodedPassword: String,
         hostActivity: Activity? = null, startImmediately: Boolean = true,
-        usesSystemIme: Boolean = false
+        keyboardMode: KeyboardMode = KeyboardMode.APP
     ): Boolean {
         if (state.isClosed) return false
         val config = state.prefs.activeConfig()?.takeIf { it.encryptedPassword == encodedPassword } ?: return false
@@ -50,17 +37,15 @@ class PaymentFlow(private val state: AppRuntime) {
             val id = if (alreadyInProgress) state.session.currentSessionId() else state.session.beginSession()
             removeListenersFromOldView()
 
-            state.session.bindKeyboard(keyboardView, hostActivity ?: keyboardView.context.findActivity(), config, usesSystemIme)
+            state.session.bindKeyboard(keyboardView, hostActivity ?: keyboardView.context.findActivity(), config, keyboardMode)
 
             // Visual payment screens are watched by VisualPaymentMonitor. Reattaching
             // their keyboard must not start a second automatic prompt after cancel.
             if (startImmediately && state.adapter.app == PaymentApp.WECHAT) {
                 synchronized(attachLock) {
-                    if (attachListener == null) {
-                        attachListener = KeyboardAttachListener()
-                    }
-                    attachListener!!.keyboardView = keyboardView
-                    attachListener!!.sessionId = id
+                    val listener = attachListener ?: KeyboardAttachListener().also { attachListener = it }
+                    listener.keyboardView = keyboardView
+                    listener.sessionId = id
                 }
             }
 
@@ -125,6 +110,7 @@ class PaymentFlow(private val state: AppRuntime) {
         var sessionId: Long = 0L
 
         override fun onViewAttachedToWindow(view: View) {
+            if (state.isClosed || keyboardView !== view || state.session.getCurrentKeyboardView() !== view) return
             keyboardView?.let { kv ->
                 if (state.session.isCurrentSession(sessionId) &&
                     !state.session.isAuthenticationInProgress() &&

@@ -15,8 +15,9 @@ internal object PaymentWindowRoots {
     fun attached(): List<ViewGroup> {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Window inspection must run on the main thread" }
         return runCatching {
-            WindowInspector.getGlobalWindowViews().filterIsInstance<ViewGroup>()
-                .filter { it.isAttachedToWindow }
+            WindowInspector.getGlobalWindowViews().mapNotNull { view ->
+                (view as? ViewGroup)?.takeIf { it.isAttachedToWindow }
+            }
         }.onFailure { ModuleLog.w(it) { "payment window enumeration failed" } }
             .getOrDefault(emptyList())
     }

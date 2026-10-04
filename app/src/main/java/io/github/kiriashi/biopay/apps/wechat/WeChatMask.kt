@@ -13,7 +13,7 @@ import io.github.kiriashi.biopay.core.util.findActivity
 
 internal object WeChatMask {
     // Reserved password area above the native keypad; Flutter provides no node bounds.
-    private const val FLUTTER_PASSWORD_HEIGHT_DP = 57f
+    private const val FLUTTER_PASSWORD_HEIGHT_DP = 60f
 
     fun passwordPanel(input: View?): View? {
         if (input == null || !input.isAttachedToWindow || !input.isShown) return null
